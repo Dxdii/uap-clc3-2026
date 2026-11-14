@@ -191,6 +191,27 @@ module cosmosRbac 'modules/cosmosdb-rbac.bicep' = {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Observability — diagnostic settings routing resource logs + metrics of every
+// exercise resource into the Log Analytics workspace (ACA env logs and App
+// Insights telemetry already land there via appLogsConfiguration /
+// workspace-based App Insights). See modules/diagnostics.bicep.
+// -----------------------------------------------------------------------------
+module diagnostics 'modules/diagnostics.bicep' = {
+  name: '${deploymentName}-diagnostics'
+  scope: resourceGroup(rgName)
+  dependsOn: [rg]
+  params: {
+    workspaceId: monitoring.outputs.workspaceId
+    storageAccountName: storage.outputs.storageAccountName
+    systemTopicName: storage.outputs.systemTopicName
+    cosmosAccountName: cosmos.outputs.accountName
+    acrName: containerApp.outputs.acrName
+    foundryAccountName: foundry.outputs.accountName
+    functionAppName: functionApp.outputs.name
+  }
+}
+
 output resourceGroupName string = rgName
 output functionAppName string = functionApp.outputs.name
 output uploadAppFqdn string = containerApp.outputs.fqdn

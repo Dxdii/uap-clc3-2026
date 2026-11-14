@@ -266,6 +266,7 @@ uap-clc3-2026/
 
 ## WP6 — Validation, cost & cleanup
 - Acceptance checklist: infra deploys green; function listed in portal with blob trigger (Event Grid) enabled; upload via curl/Postman → document appears in Cosmos within seconds; App Insights shows the execution; ACA returns 200 and blob exists.
+- Observability: `modules/diagnostics.bicep` routes resource logs + `AllMetrics` of storage, Event Grid system topic, Cosmos DB, ACR, Foundry account and the function app (`Microsoft.Web/sites`) into the LA workspace via `Microsoft.Insights/diagnosticSettings` (workspace local auth enabled → no extra RBAC). ACA env logs (`appLogsConfiguration` → log-analytics) and App Insights (workspace-based) already land there. Platform metrics are automatic in Azure Monitor. Foundry `RequestResponse` deliberately off (logs base64 image payloads). Cost: first 5 GB/month free + 30-day retention → $0 at exercise scale. README section "Explore observability" lists ready-to-run KQL.
 - Cost validation: per Part 6 — expected spend ≈ **$3 per student with cleanup after ~14 days; ≈ $20–25 worst case if resources are left running all semester** (dominated by ACR Basic at $0.17/day; everything else is scale-to-zero/serverless/inside free grants; model ≈ $0.001/image). Well below the ~$80 student cap; >10× cheaper per day than the 2025 example (~$2/day).
 - Cleanup script/instructions; purge note for Cognitive Services (soft-deleted names block re-deployment).
 
