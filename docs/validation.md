@@ -110,3 +110,16 @@ subscription `sub-<func>-AnalyzeImage` (BlobCreated, subject prefix `…/imagean
 (**Succeeded**, 10.6 s) → Cosmos DB `ImageAnalysis/results` contains document `id=test2.jpeg`
 with the gpt-5-mini JSON analysis (caption/tags/objects/colors) written via the Cosmos output
 binding with managed identity.
+
+## CI token-auth validation (2026-11-14)
+
+* **FH OOe tenant blocks app registration for students** (probe run by the professor with a student
+  account `p61219@fhooe.at`): `az ad app create` → "Directory permission is needed for the current user
+  to register the application … Insufficient privileges". Conclusion: no service-principal auth for
+  students → workflows authenticate with the student's az CLI token store stored as repo secret
+  `AZURE_CLI_TOKENS` (set by `scripts/preflight.sh` step 6 via `gh`).
+* **Token-store injection works on a clean environment** (simulated runner): copying
+  `~/.azure/msal_token_cache.json` + `azureProfile.json` into a fresh `AZURE_CONFIG_DIR` makes
+  `az account show`, `az group list` and `az account get-access-token` (refresh path) all succeed.
+  Note: current az CLI versions store tokens in `msal_token_cache.json` (not `accessTokens.json`);
+  preflight bundles whichever exist.

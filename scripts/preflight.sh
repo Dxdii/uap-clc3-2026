@@ -9,15 +9,25 @@
 #      Container Apps, Cognitive Services/Foundry, Cosmos DB, Storage, ...)
 #   3. the gpt-5-mini quota (TPM) per candidate region
 #   4. compute quota per candidate region (informational)
+#   5. verdict: RECOMMENDED LOCATION
+#   6. GitHub wiring: pushes the local az CLI token store as repo secret
+#      AZURE_CLI_TOKENS plus repo variables (RESOURCE_GROUP, LOCATION, ...)
+#      into YOUR fork, so the GitHub Actions workflows (.github/workflows/)
+#      can deploy without a service principal (students cannot create app
+#      registrations in the FH OOe tenant — verified: AADSTS65001-style
+#      "Insufficient privileges" from `az ad app create`).
 #
-# Output: a table of candidate regions and a final RECOMMENDED LOCATION line.
+# Output: a table of candidate regions, a final RECOMMENDED LOCATION line, and
+# (unless --skip-gh) the GitHub secret/variables setup result.
 #
 # The script is DEFENSIVE on purpose: if a check cannot run (missing role,
 # CLI too old, ...), it prints the equivalent MANUAL step (see
 # scripts/README.md) and continues. It never hard-fails.
 #
-# Requirements: Azure CLI (az), jq. Run inside the devcontainer or any shell
-# with both installed:   bash scripts/preflight.sh
+# Requirements: Azure CLI (az), jq, GitHub CLI (gh, authenticated) for step 6.
+# Run inside the devcontainer or any shell with those installed:
+#   bash scripts/preflight.sh            # full run incl. GitHub wiring
+#   bash scripts/preflight.sh --skip-gh  # region/quota checks only
 # =============================================================================
 set -uo pipefail
 
@@ -242,3 +252,75 @@ info "Use this value as the 'location' parameter of: az deployment sub create --
 info "If the deployment fails midway: FIRST delete the partial resource group (az group delete --name <rgName> --yes), THEN re-run with a NEW deployment name (--name clc3-2026-r2) — a resource group's location is immutable, so retrying in another region also needs a fresh rgName."
 info "If Container Apps environment creation fails with AKSCapacityHeavyUsage, re-run with the next OK region from the table above (fresh rgName + deployment name)."
 info "======================================================="
+
+# --- 6. GitHub wiring: repo secret (az token store) + variables ---------------
+# Students cannot create service principals in the FH OOe tenant (app
+# registration is disabled there), so the workflows authenticate with the
+# student's own az CLI token store, stored as the repo secret AZURE_CLI_TOKENS.
+# The runner decodes it into $HOME/.azure (see the workflows' login step).
+SKIP_GH=0
+for a in "$@"; do [ "$a" = "--skip-gh" ] && SKIP_GH=1; done
+
+if [ "$SKIP_GH" = "1" ]; then
+  info "Step 6: skipped (--skip-gh). Manual GitHub wiring: scripts/README.md section 6."
+elif ! command -v gh >/dev/null 2>&1; then
+  warn "Step 6: GitHub CLI (gh) not found — install https://cli.github.com, run 'gh auth login', then re-run this script. Manual steps: scripts/README.md section 6."
+elif ! gh auth status >/dev/null 2>&1; then
+  warn "Step 6: gh is not authenticated — run 'gh auth login' (device code) and re-run this script. Manual steps: scripts/README.md section 6."
+else
+  info "Step 6: wiring GitHub Actions in your fork (repo secret + variables) ..."
+  REMOTE="$(git remote get-url origin 2>/dev/null || true)"
+  # portable owner/repo extraction (BSD sed has no lazy quantifiers)
+  REPO="$(printf '%s' "$REMOTE" | sed -E 's#^.*github\.com[/:]##; s#\.git$##')"
+  if [ -z "$REMOTE" ] || ! printf '%s' "$REPO" | grep -qxE '[^/]+/[^/]+'; then
+    warn "Step 6: origin remote is not a GitHub repo ('$REMOTE'). Point origin at YOUR fork (git remote set-url origin <fork-url>) and re-run, or do the manual steps in scripts/README.md section 6."
+  else
+    info "GitHub repo: $REPO"
+    RG_NAME="${RG_NAME:-}"
+    if [ -z "$RG_NAME" ]; then
+      if [ -t 0 ]; then
+        read -r -p "Resource group name for your deployment [rg-clc3-$USER]: " RG_NAME
+      fi
+      RG_NAME="${RG_NAME:-rg-clc3-$USER}"
+    fi
+    LOC="${LOCATION:-$RECOMMENDED}"
+    TENANT="$(az account show --query tenantId -o tsv)"
+
+    # --- token store bundle -> secret AZURE_CLI_TOKENS ---
+    AZHOME="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+    FILES=()
+    for f in azureProfile.json msal_token_cache.json accessTokens.json; do
+      [ -f "$AZHOME/$f" ] && FILES+=("$f")
+    done
+    if [ "${#FILES[@]}" -lt 2 ] || ! printf '%s\n' "${FILES[@]}" | grep -qE 'msal_token_cache|accessTokens'; then
+      err "Step 6: no az token store found in $AZHOME (need azureProfile.json plus msal_token_cache.json or accessTokens.json). Run 'az login' first, then re-run this script."
+    else
+      B64="$(tar -czf - -C "$AZHOME" "${FILES[@]}" | base64 | tr -d '\n')"
+      gh secret set AZURE_CLI_TOKENS --repo "$REPO" --body "$B64" \
+        && info "secret AZURE_CLI_TOKENS set (az CLI token store; refresh by re-running this script — the refresh token lasts ~90 days)"
+    fi
+
+    # --- upload token: set once, keep stable across CI redeploys ---
+    if gh secret list --repo "$REPO" --jq '.[].name' 2>/dev/null | grep -qx UPLOAD_TOKEN; then
+      info "secret UPLOAD_TOKEN already exists — keeping it (CI infra redeploys reuse it). Read the current value for README step 4/7 with: az containerapp secret show --name <containerAppName> --resource-group $RG_NAME --secret-name upload-token --query value -o tsv"
+    else
+      UPLOAD_TOKEN="$(openssl rand -hex 16)"
+      gh secret set UPLOAD_TOKEN --repo "$REPO" --body "$UPLOAD_TOKEN" \
+        && info "secret UPLOAD_TOKEN set. SAVE IT — you need it in README step 4 (deploy) and step 7 (upload): $UPLOAD_TOKEN"
+    fi
+
+    # --- repo variables consumed by the workflows ---
+    gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"      && \
+    gh variable set AZURE_TENANT_ID       --repo "$REPO" --body "$TENANT"   && \
+    gh variable set RESOURCE_GROUP        --repo "$REPO" --body "$RG_NAME"  && \
+    gh variable set LOCATION              --repo "$REPO" --body "$LOC"      && \
+    gh variable set DEPLOYMENT_NAME       --repo "$REPO" --body "clc3-2026" \
+      && info "variables set: AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, RESOURCE_GROUP=$RG_NAME, LOCATION=$LOC, DEPLOYMENT_NAME=clc3-2026"
+    info "The remaining variables (FUNCTION_APP_NAME, STORAGE_ACCOUNT_NAME, IMAGE_CONTAINER_NAME, ACR_NAME, CONTAINER_APP_NAME) are set automatically by the infra-deploy workflow from the deployment outputs."
+
+    info "SECURITY: AZURE_CLI_TOKENS carries YOUR credentials (Owner on your own subscription). Keep the fork PRIVATE and give write access only to yourself — anyone with write access to the repo can read secrets through a workflow. GitHub masks the value in logs."
+    info "Next: README step 4 — deploy the infra:"
+    info "  az deployment sub create --name clc3-2026 --location $LOC --template-file infrastructure/main.bicep --parameters rgName=$RG_NAME location=$LOC uploadToken=<your UPLOAD_TOKEN>"
+    info "(or just push to main of your fork and let the infra-deploy workflow run)"
+  fi
+fi

@@ -1,12 +1,16 @@
 # Builds and deploys the Flex Consumption Python function to the function app
 # created by infra-deploy. Flex Consumption has NO remote build, so the package
-# is built locally on the runner (--build local).
+# is built on the runner (--build local, Python 3.13 — no macOS-wheel issue).
 #
-# Required repo variables:
-#   FUNCTION_APP_NAME      e.g. func-<suffix> (from infra outputs)
-#   RESOURCE_GROUP         e.g. rg-clc3-<lastname>
-#   STORAGE_ACCOUNT_NAME   e.g. st<suffix>  (from infra outputs)
-#   IMAGE_CONTAINER_NAME   e.g. imageanalysis (from infra outputs)
+# Auth: the student's az CLI token store as repo secret AZURE_CLI_TOKENS
+# (set by scripts/preflight.sh — students cannot create service principals
+# in the FH OOe tenant).
+#
+# Required repo secrets/variables:
+#   Secret   AZURE_CLI_TOKENS     (from preflight.sh)
+#   Variable AZURE_SUBSCRIPTION_ID, FUNCTION_APP_NAME, RESOURCE_GROUP,
+#            STORAGE_ACCOUNT_NAME, IMAGE_CONTAINER_NAME
+#            (the last four are set by the infra-deploy workflow from its outputs)
 
 name: function-deploy
 
@@ -17,7 +21,6 @@ on:
     paths: ["src/image-analysis-function/**"]
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -29,9 +32,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Login to Azure with the student's az token (repo secret)
+        env:
+          AZURE_CLI_TOKENS: ${{ secrets.AZURE_CLI_TOKENS }}
+        run: |
+          mkdir -p "$HOME/.azure"
+          echo "$AZURE_CLI_TOKENS" | base64 -d | tar -xz -C "$HOME/.azure"
+          az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          az account show --query "{name:name, id:id, user:user.name}" -o json
+
+      - name: Verify infra variables are set (run infra-deploy first)
+        run: |
+          if [ -z "${{ vars.RESOURCE_GROUP }}" ] || [ -z "${{ vars.FUNCTION_APP_NAME }}" ] || [ -z "${{ vars.STORAGE_ACCOUNT_NAME }}" ] || [ -z "${{ vars.IMAGE_CONTAINER_NAME }}" ]; then
+            echo "::error::infra variables are not set — run the infra-deploy workflow first (it publishes the deployment outputs as repo variables), then re-run this workflow."
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         with:

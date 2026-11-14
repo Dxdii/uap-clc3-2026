@@ -1,27 +1,19 @@
 # Deploys the infrastructure (infrastructure/main.bicep) at subscription scope.
 #
-# Required repo secrets/variables (set once per fork):
-#   Secret  AZURE_CREDENTIALS   service principal JSON. The template creates Azure
-#                               RBAC role assignments (modules/rbac.bicep +
-#                               cosmosdb-rbac.bicep), which need
-#                               "Microsoft.Authorization/roleAssignments/write" —
-#                               so grant BOTH:
-#                                 Contributor                          (deploy resources)
-#                                 Role Based Access Control Administrator (create role assignments)
-#                               at subscription scope, e.g.:
-#                                 az ad sp create-for-rbac --name clc3-2026-deployer \
-#                                   --role Contributor --role "Role Based Access Control Administrator" \
-#                                   --scopes /subscriptions/<sub-id> --sdk-auth
-#                               (On a personal student subscription, Owner already covers both.)
-#   Variable RESOURCE_GROUP     e.g. rg-clc3-<lastname>
-#   Variable LOCATION           region from scripts/preflight.sh (e.g. swedencentral)
-#   Variable DEPLOYMENT_NAME    e.g. clc3-2026
-#   Variable ACR_NAME           (optional, from infra outputs) — when set and the
-#                               'latest' tag exists, infra redeploys keep the pushed
-#                               app image instead of resetting to the placeholder
+# Auth: the student's own az CLI token store, stored as repo secret
+# AZURE_CLI_TOKENS by scripts/preflight.sh (students cannot create service
+# principals in the FH OOe tenant — app registration is disabled there).
+# The login step below decodes the secret into $HOME/.azure on the runner.
 #
-# Preferably replace the secret with OIDC federation (azure/login@v2 supports
-# federated credentials) — see https://learn.microsoft.com/azure/developer/github/connect-from-azure
+# Required repo secrets/variables (set by scripts/preflight.sh):
+#   Secret   AZURE_CLI_TOKENS     base64 tar of the student's ~/.azure token store
+#   Secret   UPLOAD_TOKEN         optional — keeps the upload token stable across redeploys
+#   Variable AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, RESOURCE_GROUP, LOCATION, DEPLOYMENT_NAME
+#   Variables ACR_NAME, FUNCTION_APP_NAME, STORAGE_ACCOUNT_NAME, IMAGE_CONTAINER_NAME,
+#             CONTAINER_APP_NAME — set automatically by this workflow from the outputs
+#
+# ACR_NAME is also used to keep an already-pushed app image across infra
+# redeploys (when the 'latest' tag exists, the placeholder is not re-applied).
 
 name: infra-deploy
 
@@ -32,8 +24,8 @@ on:
     paths: ["infrastructure/**"]
 
 permissions:
-  id-token: write
   contents: read
+  actions: write   # to publish the deployment outputs as repo variables (gh variable set)
 
 jobs:
   deploy:
@@ -41,9 +33,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Login to Azure with the student's az token (repo secret)
+        env:
+          AZURE_CLI_TOKENS: ${{ secrets.AZURE_CLI_TOKENS }}
+        run: |
+          mkdir -p "$HOME/.azure"
+          echo "$AZURE_CLI_TOKENS" | base64 -d | tar -xz -C "$HOME/.azure"
+          az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          az account show --query "{name:name, id:id, user:user.name}" -o json
 
       - name: Resolve app image (keep already-pushed image across infra redeploys)
         id: image
@@ -80,3 +77,23 @@ jobs:
           az deployment sub show \
             --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" \
             --query properties.outputs -o json
+
+      # Publish the infra outputs as repo variables so the function/containerapp
+      # workflows know the resource names (they are deterministic but not
+      # computable outside ARM: take(uniqueString(subscriptionId, rgName), 16)).
+      - name: Set repo variables from deployment outputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT="$(az deployment sub show --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" --query properties.outputs -o json)"
+          for pair in FUNCTION_APP_NAME:functionAppName STORAGE_ACCOUNT_NAME:storageAccountName \
+                      IMAGE_CONTAINER_NAME:imageContainerName ACR_NAME:acrName CONTAINER_APP_NAME:containerAppName; do
+            var="${pair%%:*}"; out="${pair#*:}"
+            val="$(jq -r --arg o "$out" '.[$o].value' <<<"$OUT")"
+            if [ -n "$val" ] && [ "$val" != "null" ]; then
+              gh variable set "$var" --body "$val"
+              echo "set $var=$val"
+            else
+              echo "WARNING: output $out missing — variable $var not set" >&2
+            fi
+          done

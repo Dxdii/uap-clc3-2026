@@ -230,9 +230,24 @@ uap-clc3-2026/
 - Validate: upload via container app → check function logs (App Insights) → query Cosmos (`SELECT * FROM c` in Data Explorer).
 
 ## WP4 — CI/CD (`.github/workflows/`)
-- `infra-deploy.yml`: `az login` (OIDC or secrets), `az deployment sub create` on push to main.
-- `function-deploy.yml`: setup Python + Core Tools, `pip install -r requirements.txt`, `func azure functionapp publish --build local`.
-- `containerapp-deploy.yml`: `az acr build` (or build-push-action) + `az containerapp update --image`.
+- **Auth = student's own az token, no service principal.** Students cannot create app registrations in the
+  FH OOe tenant (verified 2026-11-14: `az ad app create` as p61219@fhooe.at → "Directory permission is needed
+  … Insufficient privileges"). So `scripts/preflight.sh` step 6 stores the student's az CLI token store
+  (base64 tar of `~/.azure/msal_token_cache.json` + `azureProfile.json`) as repo secret `AZURE_CLI_TOKENS`
+  plus variables (`AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`, `RESOURCE_GROUP`, `LOCATION`, `DEPLOYMENT_NAME`)
+  and secret `UPLOAD_TOKEN` in the student's fork via `gh`. Each workflow decodes the secret into
+  `$HOME/.azure` on the runner (mechanism validated locally with a fresh `AZURE_CONFIG_DIR`) and runs
+  `az account set`. Fork must stay private (secret = Owner creds on the student's own subscription).
+- `infra-deploy.yml`: token login, `az deployment sub create` on push to main; afterwards publishes the
+  deployment outputs (`FUNCTION_APP_NAME`, `STORAGE_ACCOUNT_NAME`, `IMAGE_CONTAINER_NAME`, `ACR_NAME`,
+  `CONTAINER_APP_NAME`) as repo variables via `gh variable set` (needs `permissions: actions: write`).
+- `function-deploy.yml`: setup Python 3.13 + Core Tools, `pip install -r requirements.txt`,
+  `func azure functionapp publish --build local` (runner-side build — no macOS-wheel issue), then
+  create/update the Event Grid blob webhook subscription.
+- `containerapp-deploy.yml`: runner-side `docker build` + `docker push` to ACR with
+  `az acr login --expose-token` (works on Basic SKU with the user token) + `az containerapp update --image`.
+  `az acr build` (ACR Tasks) is deliberately NOT used: blocked on Azure for Students
+  (`TasksOperationsNotAllowed`) and needs Standard/Premium SKU.
 
 ## WP5 — Docs & devcontainer
 - Rewrite `README.md` for students:

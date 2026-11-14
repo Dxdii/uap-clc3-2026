@@ -118,3 +118,44 @@ fails with `AKSCapacityHeavyUsage` — region capacity exhaustion):
    ```
    Pick the next candidate region from the `preflight.sh` result table (the one
    with the most remaining gpt-5-mini GlobalStandard quota).
+
+## 6. GitHub wiring (manual equivalent of `preflight.sh` step 6)
+
+`preflight.sh` sets these automatically. If you ran it with `--skip-gh`, do this by hand
+(requires the GitHub CLI, `gh auth login` once, and your fork as the `origin` remote):
+
+```bash
+REPO=<owner>/<fork>          # e.g. gh repo view --json nameWithOwner -q .nameWithOwner
+SUB=$(az account show --query id -o tsv)
+TENANT=$(az account show --query tenantId -o tsv)
+RG_NAME=rg-clc3-<lastname>
+LOC=<RECOMMENDED LOCATION from preflight output>
+
+# 1. az CLI token store as repo secret (students cannot create SPs in the FH OOe
+#    tenant — `az ad app create` fails with "Insufficient privileges" there)
+AZHOME="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+FILES="azureProfile.json"
+[ -f "$AZHOME/msal_token_cache.json" ] && FILES="$FILES msal_token_cache.json"
+[ -f "$AZHOME/accessTokens.json" ] && FILES="$FILES accessTokens.json"
+tar -czf - -C "$AZHOME" $FILES | base64 | tr -d '\n' | gh secret set AZURE_CLI_TOKENS --repo "$REPO" --body-file -
+
+# 2. upload token (set once; reused by CI so it does not rotate)
+gh secret set UPLOAD_TOKEN --repo "$REPO" --body "$(openssl rand -hex 16)"   # save the printed value!
+
+# 3. variables used by .github/workflows/
+gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"
+gh variable set AZURE_TENANT_ID       --repo "$REPO" --body "$TENANT"
+gh variable set RESOURCE_GROUP        --repo "$REPO" --body "$RG_NAME"
+gh variable set LOCATION              --repo "$REPO" --body "$LOC"
+gh variable set DEPLOYMENT_NAME       --repo "$REPO" --body "clc3-2026"
+# FUNCTION_APP_NAME / STORAGE_ACCOUNT_NAME / IMAGE_CONTAINER_NAME / ACR_NAME /
+# CONTAINER_APP_NAME are set automatically by the infra-deploy workflow from the
+# deployment outputs — no manual step needed.
+```
+
+The workflows decode `AZURE_CLI_TOKENS` into `$HOME/.azure` on the runner (see the "Login to Azure"
+step in each workflow) — the secret never appears in logs (GitHub masks it). Re-run this when the
+token expires (~90 days) or after `az login` on a different account.
+
+Keep the fork **private**: the secret carries your own subscription credentials (Owner on your own
+subscription), and anyone with write access to the repo can read secrets through a workflow.
