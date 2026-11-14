@@ -1,172 +1,217 @@
 # Practical Exam — 3-Phase Deployment Plan (uap-clc3-2026)
 
-**Format:** ~3 hours, individual work. Students walk through the deployment of the
-reference architecture step by step and practice the lecture concepts hands-on.
-They start from an **empty Azure for Students subscription** and their **own private
-fork** of this repo.
+**Format:** ~3 hours, individual work. Students deploy the reference architecture step by step in
+their own Azure for Students subscription and own private fork, practicing the lecture concepts.
 
 **Diagrams:** [architecture](diagrams/architecture.mermaid) ·
 [infrastructure/Bicep](diagrams/infrastructure.mermaid) ·
 [CI/CD](diagrams/cicd.mermaid) · [observability](diagrams/observability.mermaid)
 
-## Concepts covered (exam objectives → where they are practiced)
+## Concepts covered (exam objectives → phase)
 
-| # | Concept | Practiced in |
+| # | Concept | Phase |
 |---|---|---|
-| 1 | Deployment methods in Azure (Portal / CLI / Bicep / CI) | Phase 1 (CLI+Bicep, Portal read), Phase 2 (CI), Phase 3 (Portal) |
-| 2 | Infrastructure as Code with Bicep — structure, params, modules, dynamic values (`uniqueString`), resource chaining (outputs → params, `dependsOn`) | Phase 1 |
-| 3 | Core Azure services configured via the **Azure Portal** (Storage, Event Grid, Foundry, Cosmos, ACA, Functions, ACR, Monitor) | Phase 1 + Phase 3 |
-| 4 | CI/CD — getting code into Azure services (GitHub Actions, runner-side docker build, `func publish`, token auth) | Phase 2 |
-| 5 | Azure Foundry — deploy models, inspect model version/inputs/outputs, check usage | Phase 2 + Phase 3 |
-| 6 | Observability — logs, errors, service communication, metrics (Log Analytics, App Insights, Metrics) | Phase 3 |
+| 1 | Deployment methods in Azure (Portal / CLI / Bicep / CI) | 1, 2, 3 |
+| 2 | IaC with Bicep — structure, params, modules, dynamic values, resource chaining | 1 |
+| 3 | Core Azure services configured via the Azure Portal | 1, 3 |
+| 4 | CI/CD — getting code into Azure services | 2 |
+| 5 | Azure Foundry — models, versions, inputs/outputs, usage | 2, 3 |
+| 6 | Observability — logs, errors, service communication, metrics | 3 |
 
-## Ground rules (apply to all phases)
+## Ground rules
 
-1. **Fork stays private.** `scripts/preflight.sh` step 6 stores your az CLI token as the repo
-   secret `AZURE_CLI_TOKENS` — anyone with write access to the repo could misuse it.
-2. **Run `scripts/preflight.sh` first** (Step 0): it shows which regions your subscription may
-   deploy to (Azure Policy) and where the model quota is — you need this for the `location`
-   parameter. Set a **budget alert** (README step 3) before deploying anything.
-3. Use the region from preflight's `RECOMMENDED LOCATION` for **everything** (single region).
-4. Work through the phases **in order** — each phase builds on the previous one.
-5. **Cleanup at the end** (Phase 3, last step): `az group delete` + purge the soft-deleted
-   Cognitive Services account (README step 11). Leaving resources running costs credit
-   (ACR Basic is the only fixed cost, $0.17/day).
-6. Stuck? `docs/validation.md` lists the pitfalls we hit live (E1–E12, C1–C3) with fixes.
+1. Fork stays **private** (the `AZURE_CLI_TOKENS` secret carries your subscription credentials).
+2. Run `scripts/preflight.sh` first; use its `RECOMMENDED LOCATION` everywhere (single region).
+3. Set a budget alert before deploying (Phase 1, step 5).
+4. Phases build on each other — do them in order.
+5. Cleanup is mandatory at the end (Phase 3, last step).
+6. Pitfalls with fixes: `docs/validation.md` (E1–E12, C1–C3).
 
 ---
 
-## Phase 1 — "Foundation": Infrastructure as Code with Bicep (~60 min)
+# Phase 1 — Foundation: IaC (Bicep) + Portal exploration (~60 min)
 
-**Goal:** deploy the complete infrastructure once via Bicep from the CLI, then *explore and
-understand* every resource in the Azure Portal. Concepts 1, 2, 3.
+**Concepts:** 1, 2, 3. **Deliverable:** infrastructure deployed once via Bicep/CLI; every resource opened and understood in the Portal.
 
-### Steps
+## Exact steps
 
-1. **Fork + clone + devcontainer** (README steps 1–2). Run `scripts/preflight.sh` and note the
-   `RECOMMENDED LOCATION` and your allowed regions (concept 1: policies restrict regions).
-2. **Read the IaC before deploying** (concept 2 — 15 min):
-   - `infrastructure/main.bicep`: subscription scope, parameters (`rgName`, `location`, model
-     params, `uploadToken`), the `nameSuffix = take(uniqueString(subscription().subscriptionId,
-     rgName), 16)` dynamic value (why: globally unique storage/ACR/Cosmos names per student),
-     one `module` per concern, and how module **outputs chain into other modules' params**
-     (e.g. `storage.outputs.storageAccountName` → `functionApp` params) and `dependsOn`.
-   - Skim the modules in `infrastructure/modules/` — note which resource types they create.
-   - See [infrastructure diagram](diagrams/infrastructure.mermaid).
-3. **Deploy via CLI + Bicep** (concept 1 — deployment method: ARM/Bicep via `az deployment sub
-   create`, README step 4). Watch the deployment in the Portal: subscription → **Deployments** →
-   `clc3-2026` (operations, resources, outputs). Note the outputs — Phase 2 needs them.
-4. **Explore the resource group in the Portal** (concept 3 — 25 min). For each resource, open it
-   and answer: what is it for in this pipeline, how is it configured, where are its keys/RBAC?
-   - **Storage account** → Data storage → Containers → `imageanalysis`; note the Event Grid
-     **system topic** `systopic-*` (created for BlobCreated events).
-   - **Foundry account `ais-*`** → project `clc3-project` → **Model catalog / Deployments**:
-     `gpt-5-mini`, version `2025-08-07`, SKU `GlobalStandard` — this is concept 5's foundation.
-   - **Cosmos DB** → Data Explorer → database `ImageAnalysis`, container `results`, partition key.
-   - **Container Apps env + app** → note the placeholder image and that the revision is unhealthy
-     until Phase 2 pushes the real image (expected).
-   - **Function app** → Overview (Flex Consumption plan `asp-*`), Configuration → app settings
-     (identity-based connections, no keys).
-   - **ACR** → Repositories (empty until Phase 2), Access control (RBAC — AcrPull for the app).
-   - **Log Analytics + App Insights** → you will use these in Phase 3.
+1. **Fork & clone** (README step 1): fork `juergenbr/uap-clc3-2026` on GitHub (keep it **private**), clone it, `cd uap-clc3-2026`.
+2. **Dev container** (README step 2): VS Code → command palette → *Dev Containers: Reopen in Container* (Docker must run). The image has Python 3.13, az CLI, Functions Core Tools, Bicep, jq, gh.
+3. **Logins:**
+   ```bash
+   az login                                   # browser/device-code
+   az account set --subscription <your-student-sub-id>
+   gh auth login                              # once; needed by preflight step 6
+   ```
+4. **Preflight** (README step 3):
+   ```bash
+   bash scripts/preflight.sh                  # region policy + service availability + gpt-5-mini quota
+   ```
+   Note the printed `RECOMMENDED LOCATION` (call it `$LOC`) and the candidate-region list. If a check can't run automatically, the script prints the manual step (authoritative: `scripts/README.md`): Portal → Subscriptions → *Policies* → *Allowed resource deployment regions*; `az functionapp list-flexconsumption-locations`; quota via ai.azure.com → Management center → Quota or `az cognitiveservices usage list --location $LOC`.
+5. **Budget alert (free):**
+   ```bash
+   az consumption budget create --budget-name clc3-budget --amount 40 --time-grain Monthly \
+     --start-date $(date +%Y-%m-01) \
+     --notifications '{"Alert80":{"enabled":true,"operator":"GreaterThan","threshold":80,"contactEmails":["<you@students.fhooe.at>"]}}'
+   ```
+6. **Responsible AI terms** (once per subscription): Portal → Create a resource → *Cognitive Services* → tick *Responsible AI terms* → create in West Europe → delete the RG again (README step 3). Without this the Foundry resource fails.
+7. **Read the IaC before deploying** (15 min): open `infrastructure/main.bicep` and skim `infrastructure/modules/*.bicep`. Identify: params (`rgName`, `location`, `uploadToken`, model params), `var nameSuffix = take(uniqueString(subscription().subscriptionId, rgName), 16)`, the module blocks, module outputs feeding other modules' params, `dependsOn`. See [infrastructure diagram](diagrams/infrastructure.mermaid).
+8. **Deploy via CLI + Bicep** (README step 4). From the repo root:
+   ```bash
+   UPLOAD_TOKEN=$(openssl rand -hex 16); echo "SAVE THIS upload token: $UPLOAD_TOKEN"
+   az deployment sub create --name clc3-2026 --location $LOC \
+     --template-file infrastructure/main.bicep \
+     --parameters rgName=rg-clc3-<your-lastname> location=$LOC uploadToken=$UPLOAD_TOKEN
+   ```
+   If it fails on **role assignments** (AAD propagation), re-run the identical command. If it fails midway (e.g. `AKSCapacityHeavyUsage`): `az group delete --name <rg> --yes`, then re-run with a fresh rgName, new deployment name, and the next candidate region from preflight. **Save the printed outputs** (`functionAppName`, `uploadAppFqdn`, `acrName`, `acrLoginServer`, `containerAppName`, `storageAccountName`, `cosmosAccountEndpoint`, `foundryProjectEndpoint`, …).
+9. **Watch the deployment in the Portal**: subscription → **Deployments** → `clc3-2026` → operations/resources/outputs. (This is a *deployment method* observation: same ARM engine as Portal/CLI.)
+10. **Explore every resource in the Portal** (RG → Overview → click each):
+    - Storage `st*`: Data storage → Containers → `imageanalysis`; note Event Grid **system topic** `systopic-*`; Access control (IAM) → role assignments.
+    - Foundry `ais-*` → project `clc3-project` → **Model catalog / Deployments**: `gpt-5-mini`, version `2025-08-07`, SKU `GlobalStandard`, capacity. Endpoint + keys blade (note RBAC, not keys).
+    - Cosmos `cosmos-*`: Data Explorer → `ImageAnalysis` / `results` → partition key `/filename`; Settings → serverless.
+    - Container Apps env `cae-*` + app `ca-upload-*`: note placeholder image, unhealthy revision until Phase 2 (expected), ingress FQDN.
+    - Function app `func-*` + plan `asp-*`: Overview → Flex Consumption; Configuration → app settings (identity-based connections, `APPLICATIONINSIGHTS_CONNECTION_STRING` with AAD).
+    - ACR `acr*`: Repositories (empty until Phase 2); Access control → AcrPull assignment.
+    - LAW `log-*` + App Insights `appi-*`: retention 30 days; workspace-based App Insights.
 
-### Checkpoint (self-check questions)
+## Questions to answer (Phase 1)
 
-- Which three ways can you deploy resources in Azure, and which did you use here?
-- What does `uniqueString(subscription().subscriptionId, rgName)` guarantee, and why is
-  `take(..., 16)` needed for storage/ACR names?
-- How does `function.bicep` learn the storage account name? (outputs → params chaining)
-- Where in the Portal do you see that a role assignment was created, and for which principal?
-
----
-
-## Phase 2 — "Ship it": CI/CD + the Foundry model (~60 min)
-
-**Goal:** get the application code into the Container App and the Function via GitHub Actions,
-and understand the Foundry model deployment. Concepts 4, 5, 1 (CI as a deployment method).
-
-### Steps
-
-1. **Wire your fork for CI** (concept 4): run `scripts/preflight.sh` again — step 6 pushes
-   `AZURE_CLI_TOKENS` (your az token store) + `UPLOAD_TOKEN` as secrets and the subscription
-   variables. Read `scripts/README.md` section 6 for the manual equivalent and **why** a service
-   principal is not possible in the FH tenant (`az ad app create` → Insufficient privileges).
-2. **Trigger the pipeline** (concepts 1+4): push any change under `infrastructure/**` to `main`
-   → watch `infra-deploy` in the fork's **Actions** tab. Then run `containerapp-deploy` and
-   `function-deploy` via **Run workflow**. Read the workflow files and answer:
-   - Why is the image built **on the runner** (`docker build`) and not with `az acr build`?
-     (ACR Tasks blocked on student subscriptions.)
-   - How does the runner authenticate to Azure without a service principal? (token secret)
-   - How does the runner authenticate to ACR? (`az acr login --expose-token`)
-   - Why does the container app need `az containerapp registry set --identity system` before the
-     first ACR image update? (AcrPull chicken-and-egg — see validation.md C1)
-   - Why is the Event Grid subscription created **after** `func publish`? (webhook endpoint
-     validation) — see [cicd diagram](diagrams/cicd.mermaid).
-3. **Foundry in the Portal** (concept 5 — 20 min): Foundry project → **Playground** (chat/vision):
-   send `test.jpeg` and inspect the model's **inputs/outputs** (JSON). **Model catalog** → deployed
-   model: version, SKU, capacity, tokens/min quota. **Monitoring** in the AI Foundry portal:
-   requests, latency, token usage.
-
-### Checkpoint
-
-- Name the four deployment methods you used so far and where each fits.
-- What would break in CI if the fork were public? (secret exfiltration via workflow)
-- Where in the workflow do we read resource names from, and why not repo variables? (C2)
-- Which model version is deployed and why not `gpt-4o-mini`? (deprecation — validation.md)
+1. Name the deployment methods available in Azure and state which one you used in step 8 and why it fits IaC.
+2. What does `take(uniqueString(subscription().subscriptionId, rgName), 16)` guarantee, and why is the length capped at 16 for storage/ACR/Cosmos names?
+3. Trace one example of resource chaining: how does `function.bicep` learn the storage account name? (`storage.outputs.*` → module params)
+4. What is the purpose of `dependsOn` in `main.bicep`, and which dependency is implicit via outputs?
+5. In the Portal, where do you see which role assignments exist, and which built-in roles are used? (Storage Blob Data Contributor/Owner, AcrPull, Azure AI User, …)
+6. Which resource in the RG currently costs a fixed daily amount, and how much? (ACR Basic, $0.17/day)
+7. Why does the container app show an unhealthy revision at this point? What fixes it in Phase 2?
 
 ---
 
-## Phase 3 — "Operate it": e2e test, logs, metrics, errors, cleanup (~60 min)
+# Phase 2 — Ship it: CI/CD + Foundry model (~60 min)
 
-**Goal:** run the pipeline end-to-end, then use Azure native observability to see what happened,
-find errors, and check service communication and metrics. Concepts 6, 3, 5.
+**Concepts:** 4, 5, 1. **Deliverable:** function + container app code deployed (manual path *and* via GitHub Actions); Foundry model inspected in the portal.
 
-### Steps
+## Exact steps
 
-1. **E2E test**: read the FQDN + upload token (README step 7), `curl -H "X-Upload-Token: …"
-   -F file=@test.jpeg https://<fqdn>/upload` → expect 200. Then repeat with a **wrong token** →
-   401 (deliberate error for step 2).
-2. **Observe the flow** (concept 6 — 25 min), using the [observability diagram](diagrams/observability.mermaid):
-   - **Portal → Container App → Log stream / Logs**: `ContainerAppConsoleLogs_CL` in the LA
-     workspace shows the `/upload` handling and the 401.
-   - **Portal → Function app → Monitor / App Insights**: the `AnalyzeImage` execution
-     (Succeeded, duration), `AppTraces` in the workspace.
-   - **Event Grid**: system topic → the BlobCreated event delivery to the webhook
-     (`AzureDiagnostics`, provider `MICROSOFT.EVENTGRID`).
-   - **Storage**: `StorageBlobLogs` shows `PutBlob` for `test.jpeg`.
-   - **Cosmos**: Data Explorer → `ImageAnalysis/results` → document `id=test.jpeg` with the
-     model's `analysis` JSON. Also visible as `DataPlaneRequests` in `AzureDiagnostics`.
-   - **Foundry usage** (concept 5): `AzureOpenAIRequestUsage` in the workspace = token counts per
-     inference call; compare with AI Foundry portal monitoring.
-   - **Metrics**: any resource → **Metrics** (Azure Monitor): function executions, ACA requests/CPU,
-     Cosmos RU/s (`AzureMetrics` in the workspace has the same via diagnostic settings).
-3. **Find an error on purpose**: e.g. upload with wrong token (401) or temporarily break the Event
-   Grid subscription — then locate it via logs/metrics and fix it. This is the exam's core
-   observability skill: *service communication* (who called whom, in which order, with what result).
-4. **Cost check** (concept 3/ops): **Cost Management + billing** → Cost analysis per resource:
-   what costs money per day (ACR Basic $0.17) vs. what is free at this scale (LAW 5 GB/month free,
-   Cosmos serverless, Flex Consumption, scale-to-zero ACA).
-5. **Cleanup** (mandatory): README step 11 — `az group delete -g <rg> --yes`, then purge the
-   soft-deleted Cognitive Services account
-   (`az cognitiveservices account purge --name <ais-*> --location <region> -g <rg>`), verify the
-   subscription is empty.
+1. **Wire the fork for CI**: re-run `bash scripts/preflight.sh` (step 6 pushes secret `AZURE_CLI_TOKENS` + `UPLOAD_TOKEN` and the variables via `gh`; manual equivalent: `scripts/README.md` §6). Verify: your fork → Settings → Secrets and variables → Actions.
+2. **Trigger CI**: push any change under `infrastructure/**` to `main` (or *Actions → infra-deploy → Run workflow*). Watch it run. Then run **containerapp-deploy** and **function-deploy** the same way. Meanwhile read the three workflow files.
+3. **Manual function deploy** (README step 5) — do this too, to compare with CI:
+   ```bash
+   cd src/image-analysis-function
+   pip install -r requirements.txt
+   func azure functionapp publish <functionAppName> --build local
+   # macOS Apple Silicon: pre-build Linux wheels first (README step 5 gotcha):
+   #   rm -rf .python_packages && mkdir -p .python_packages/lib/site-packages
+   #   pip install --platform manylinux2014_x86_64 --python-version 3.13 --abi cp313 --only-binary=:all: --target .python_packages/lib/site-packages -r requirements.txt
+   ```
+   Portal: function app → **Functions** → `AnalyzeImage` present (trigger: Blob, Event Grid source, enabled).
+4. **Event Grid subscription** (README step 5, after publish — webhook is validated against the function):
+   ```bash
+   SUB=$(az account show --query id -o tsv); RG=rg-clc3-<your-lastname>
+   APP=<functionAppName>; ST=<storageAccountName>
+   HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)
+   BLOBS_KEY=$(az rest --method POST --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" --query systemKeys.blobs_extension -o tsv)
+   az eventgrid event-subscription create \
+     --source-resource-id "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$ST" \
+     --name "sub-$APP-AnalyzeImage" --endpoint-type webhook \
+     --endpoint "https://$HOST/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY" \
+     --included-event-types Microsoft.Storage.BlobCreated \
+     --subject-begins-with "/blobServices/default/containers/imageanalysis/blobs/"
+   ```
+5. **Manual container app deploy** (README step 6):
+   ```bash
+   ACR=<acrName>; SERVER=<acrLoginServer>
+   TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
+   echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
+   docker build --platform linux/amd64 -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
+   docker push "$SERVER/upload-app:latest"
+   az containerapp registry set --name <containerAppName> --resource-group $RG --server "$SERVER" --identity system
+   az containerapp update --name <containerAppName> --resource-group $RG --image "$SERVER/upload-app:latest"
+   ```
+   (`--platform linux/amd64` is mandatory on Apple Silicon. `registry set` must happen before the first ACR image update — AcrPull chicken-and-egg, validation.md C1.)
+6. **Foundry in the Portal** (ai.azure.com): project `clc3-project` → **Playground** → send `test.jpeg`, inspect request/response JSON (inputs/outputs); **Model catalog** → deployed model: name, version `2025-08-07`, SKU, capacity, TPM quota; **Monitoring**: requests, latency, tokens.
 
-### Checkpoint
+## Questions to answer (Phase 2)
 
-- Trace one uploaded image through all six services using only logs/metrics — which table shows
-  which hop?
-- Where do you see that Event Grid delivered the event successfully?
-- How many tokens did your inference call consume, and where is that visible?
-- What did the wrong-token request look like in the container app logs (status code, path)?
+1. Why does the CI build the image on the runner (`docker build`) instead of `az acr build`? What error do student subscriptions get, and which SKU would ACR Tasks need?
+2. How does the GitHub runner authenticate to Azure without a service principal? What exactly is in the `AZURE_CLI_TOKENS` secret, and why must the fork be private?
+3. How does the runner authenticate to ACR for `docker push`? (`az acr login --expose-token`)
+4. Why must `az containerapp registry set --identity system` run before the first ACR-image update, and why is the registry entry not in the Bicep template? (C1)
+5. Why is the Event Grid subscription created only *after* `func publish`? What endpoint does it use and which system key authenticates it?
+6. Why does Flex Consumption need `--build local`? What breaks on macOS without the manylinux pre-build?
+7. Which model version is deployed and why not `gpt-4o-mini`? Where do you check deprecations?
+8. In the workflows, where do `ACR_NAME`/`FUNCTION_APP_NAME`/etc. come from, and why not repo variables set by CI? (C2 — read from `az deployment sub show` outputs)
 
 ---
 
-## Appendix — quick reference
+# Phase 3 — Operate it: e2e test, observability, cost, cleanup (~60 min)
 
-- Preflight (regions/quotas + GitHub wiring): `bash scripts/preflight.sh` — manual steps in `scripts/README.md`
-- Manual infra deploy: README step 4 (`az deployment sub create …`)
-- Workflows: `.github/workflows/infra-deploy.yml`, `containerapp-deploy.yml`, `function-deploy.yml`
-- Upload test: README step 7 (curl + token from `az containerapp secret show`)
-- KQL snippets for the LA workspace: README step 7 "Explore observability"
-- Known pitfalls with fixes: `docs/validation.md` (E1–E12, C1–C3)
-- Cleanup: README step 11 (incl. Cognitive Services purge)
+**Concepts:** 6, 3, 5. **Deliverable:** one successful upload → analysis → Cosmos document, all hops traced in logs/metrics; deliberate error found; costs understood; everything deleted.
+
+## Exact steps
+
+1. **E2E upload** (README step 7):
+   ```bash
+   curl -H "X-Upload-Token: $UPLOAD_TOKEN" -F "file=@test.jpeg" https://<uploadAppFqdn>/upload
+   # expect HTTP 200 + JSON {blobName, container, size, message}
+   curl -H "X-Upload-Token: wrong-token" -F "file=@test.jpeg" https://<uploadAppFqdn>/upload
+   # expect HTTP 401  (deliberate error for step 2)
+   ```
+2. **Trace every hop with Azure native tooling** (see [observability diagram](diagrams/observability.mermaid)); Portal → LAW `log-*` → Logs (KQL from README step 7 "Explore observability"):
+   - ACA: `ContainerAppConsoleLogs_CL | where ContainerAppName_s contains "ca-upload"` → the `/upload` 200 **and** the 401.
+   - Function: portal → function app → **Monitor** (App Insights); in LAW: `AppTraces | where Message contains "AnalyzeImage"` → execution Succeeded + duration.
+   - Event Grid: `AzureDiagnostics | where ResourceProvider == "MICROSOFT.EVENTGRID"` → BlobCreated delivery to the webhook.
+   - Storage: `StorageBlobLogs | where OperationName has "PutBlob"` → `test.jpeg` written.
+   - Foundry: `AzureDiagnostics | where ResourceProvider == "MICROSOFT.COGNITIVESERVICES"` (Audit/Trace/AzureOpenAIRequestUsage) → inference call + token counts; compare with Foundry portal Monitoring.
+   - Cosmos: Portal → Data Explorer → `ImageAnalysis/results` → document `id=test.jpeg` with `analysis` JSON; in LAW `AzureDiagnostics | where ResourceProvider == "MICROSOFT.DOCUMENTDB" and Category == "DataPlaneRequests"`.
+   - Metrics: any resource → **Monitor → Metrics** (function executions, ACA requests/CPU, Cosmos RU/s); same data in LAW as `AzureMetrics`.
+3. **Deliberate-error exercise:** with the wrong-token 401 (or by deleting the Event Grid subscription), find the failure in logs/metrics within 5 minutes and explain the service-communication chain (who called whom, in which order, with which result code).
+4. **Cost check:** Portal → subscription → **Cost analysis**: group by resource — what costs per day (ACR Basic $0.17) vs. what is free at this scale (LAW 5 GB/month free, Cosmos serverless, Flex, scale-to-zero ACA, model ~$0.001/image). Compare with your budget alert.
+5. **Cleanup (mandatory, README step 11):**
+   ```bash
+   az group delete --name rg-clc3-<your-lastname> --yes --no-wait
+   # after it finishes, purge the soft-deleted Cognitive Services account so names can be reused:
+   az cognitiveservices account purge --name <ais-...> --location $LOC -g rg-clc3-<your-lastname>
+   az group list   # verify empty
+   ```
+
+## Questions to answer (Phase 3)
+
+1. Trace one uploaded image through all six services using only logs/metrics — which table/query shows which hop?
+2. Where do you see that Event Grid delivered the BlobCreated event successfully?
+3. How many tokens did your inference consume, and where is that visible (two places)?
+4. What did the wrong-token request look like in the container app logs (status code, path, timestamp)?
+5. Which diagnostic-setting categories are enabled for storage vs. Cosmos vs. Foundry, and why is Foundry `RequestResponse` off? (cost: base64 image payloads)
+6. Why do platform metrics need no diagnostic setting, and what is the difference between Azure Monitor Metrics and the `AzureMetrics` table in the LAW?
+7. What is the only fixed daily cost in this architecture, and how would you verify it in Cost analysis?
+8. Why must the Cognitive Services account be purged after `az group delete` before re-deploying with the same names?
+
+---
+
+# Appendix A — Answer key (for the examiner)
+
+- **P1-Q1:** Portal, Cloud Shell, CLI/PowerShell, ARM/Bicep, REST, SDKs, CI (GitHub Actions) — step 8 used CLI+Bicep (ARM engine), which is repeatable/scriptable vs. Portal clicks.
+- **P1-Q2:** deterministic per (subscription, rgName) → no collisions between students in different subscriptions; 16 hex chars because storage/ACR/Cosmos names have length limits and need lowercase alphanumerics.
+- **P1-Q3:** `storage.outputs.storageAccountName` passed as `storageAccountName` param to the `functionApp` module — outputs of one module become inputs of another (chaining); `dependsOn` is for ordering without data flow (e.g. rbac needs the RG).
+- **P1-Q5:** RG → Access control (IAM) → Role assignments; roles: Storage Blob Data Owner/Contributor, AcrPull, Azure AI User, Monitoring Metrics Publisher, Cosmos DB Built-in Data Contributor — all to managed-identity principals, no keys.
+- **P1-Q6:** ACR Basic $0.1666/day; everything else is consumption/free-tier at this scale.
+- **P1-Q7:** placeholder MCR image revision is unhealthy until the real ACR image is pushed in Phase 2.
+- **P2-Q1:** `TasksOperationsNotAllowed` on student subs; ACR Tasks need Standard/Premium. Runner-side build + `az acr login --expose-token` works on Basic.
+- **P2-Q2:** base64 tar of `~/.azure` token store (msal_token_cache.json + azureProfile.json); workflows decode it into `$HOME/.azure` and `az account set`. Public fork → anyone with write access can read secrets via a workflow.
+- **P2-Q4:** the platform mints an ACR pull token at first revision provisioning; AcrPull is only assigned by rbac.bicep *after* the containerapp module — declaring the registry in Bicep deadlocks ("Operation expired"). CI adds it via `registry set` once AcrPull exists.
+- **P2-Q5:** the blob-extension webhook endpoint is validated against the published function; key = `blobs_extension` system key from `listkeys`.
+- **P2-Q6:** Flex has no remote/Oryx build; `func publish --build local` runs pip on the host — on macOS that packages macOS wheels → Linux host fails with `invalid ELF header`, 0 functions loaded.
+- **P2-Q7:** gpt-5-mini (2025-08-07); gpt-4o-mini (2024-07-18) is deprecating and rejected for new deployments (validation.md).
+- **P2-Q8:** `az deployment sub show --name clc3-2026 --query properties.outputs` — GITHUB_TOKEN couldn't be granted write on repo variables reliably on fresh forks (403, validation.md C2).
+- **P3-Q1:** upload: ContainerAppConsoleLogs_CL (200/401) → StorageBlobLogs PutBlob → AzureDiagnostics EVENTGRID → AppTraces AnalyzeImage → AzureDiagnostics COGNITIVESERVICES (usage) → DOCUMENTDB DataPlaneRequests + Data Explorer doc.
+- **P3-Q3:** `AzureOpenAIRequestUsage` in LAW + Foundry portal Monitoring (tokens/requests/latency).
+- **P3-Q5:** storage blob child StorageRead/Write/Delete→StorageBlobLogs; Cosmos DataPlaneRequests et al.; Foundry Audit/Trace/AzureOpenAIRequestUsage — RequestResponse logs full payloads incl. base64 image (~1.4× upload size).
+- **P3-Q6:** platform metrics are emitted to Azure Monitor automatically (Metrics explorer, free); `AllMetrics` diagnostic settings copy them into `AzureMetrics` in the LAW.
+- **P3-Q7:** ACR Basic only; Cost analysis grouped by resource/resource group.
+- **P3-Q8:** soft-delete keeps the name reserved (`FlagMustBeSetForRestore` on recreate); purge removes it.
+
+# Appendix B — Quick reference
+
+- Preflight: `bash scripts/preflight.sh` (manual: `scripts/README.md`)
+- Infra deploy: README step 4 · Function: step 5 · Container app: step 6 · E2E: step 7 · Cleanup: step 11
+- Workflows: `.github/workflows/{infra-deploy,containerapp-deploy,function-deploy}.yml`
+- KQL snippets: README step 7 "Explore observability" · Pitfalls: `docs/validation.md`
