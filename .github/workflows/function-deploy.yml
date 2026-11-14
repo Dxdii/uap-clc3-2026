@@ -59,7 +59,7 @@ jobs:
           APP="${{ vars.FUNCTION_APP_NAME }}"
           STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
           SUB_NAME="sub-$APP-AnalyzeImage"
-          HOST="$(az functionapp show --name "$APP" --resource-group "$RG" --query defaultHostName -o tsv)"
+          HOST="$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)"
           # the blobs_extension system key can take a moment to appear after publish -> retry
           BLOBS_KEY=""
           for i in $(seq 1 10); do

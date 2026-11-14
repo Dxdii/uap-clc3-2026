@@ -6,7 +6,7 @@
 //   - Resource group
 //   - Log Analytics + Application Insights
 //   - Storage account (GPv2) with 'imageanalysis' container + Event Grid topic
-//   - Microsoft Foundry resource (AIServices) + project + gpt-4o-mini deployment
+//   - Microsoft Foundry resource (AIServices) + project + gpt-5-mini deployment
 //   - Cosmos DB for NoSQL (serverless) — database ImageAnalysis / container results
 //   - Azure Functions app on the Flex Consumption plan (FC1) with system identity
 //     (the Event Grid subscription -> function 'AnalyzeImage' is created AFTER the
@@ -33,10 +33,10 @@ param rgName string
 param location string
 
 @description('Vision model deployed into the Foundry project.')
-param modelName string = 'gpt-4o-mini'
+param modelName string = 'gpt-5-mini'
 
-@description('Model version. NOTE: gpt-4o-mini (2024-07-18) is reported to retire 2027-01-14 — verify on the official deprecations page and switch this param if needed.')
-param modelVersion string = '2024-07-18'
+@description('Model version. NOTE: gpt-4o-mini (2024-07-18) is Deprecating and REJECTED for new deployments (verified 2026-11-14) — we default to gpt-5-mini (2025-08-07, GA). Check the deprecations page before the next semester.')
+param modelVersion string = '2025-08-07'
 
 @description('Deployment SKU (GlobalStandard = pay-per-token, cheapest for the exercise).')
 param modelSkuName string = 'GlobalStandard'
@@ -46,10 +46,10 @@ param modelSkuName string = 'GlobalStandard'
 param modelCapacity int = 1
 
 @description('Name of the model deployment inside Foundry (used as the model name in SDK calls).')
-param modelDeploymentName string = 'gpt-4o-mini'
+param modelDeploymentName string = 'gpt-5-mini'
 
-@description('Upload-app container image. Default = public placeholder listening on 8080. Set to <acr>.azurecr.io/upload-app:latest to keep the deployed app across infra redeploys (infra-deploy.yml does this automatically when the tag exists).')
-param uploadAppImage string = 'nginxinc/nginx-unprivileged:latest'
+@description('Upload-app container image. Default = public MCR placeholder (pullable; unhealthy until replaced). Set to <acr>.azurecr.io/upload-app:latest to keep the deployed app across infra redeploys (infra-deploy.yml does this automatically when the tag exists).')
+param uploadAppImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
 @description('Shared token for the upload endpoint (X-Upload-Token header). Pass your own (openssl rand -hex 16) so it survives infra redeploys; otherwise a random GUID is used per deployment and must be re-read via "az containerapp secret show".')
 @secure()
