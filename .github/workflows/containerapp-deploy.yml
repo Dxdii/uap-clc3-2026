@@ -64,8 +64,15 @@ jobs:
             -f src/upload-app/Dockerfile src/upload-app
           docker push "$SERVER/upload-app:${{ github.sha }}"
           docker push "$SERVER/upload-app:latest"
+          # --registry-server/--registry-identity: pull auth for the ACR image
+          # uses the app's system-assigned identity, which infra-deploy's rbac
+          # module granted AcrPull (the app is created WITHOUT a registry entry
+          # so its first revision can provision with the public placeholder image
+          # before any role assignment exists).
           az containerapp update \
             --name "${{ vars.CONTAINER_APP_NAME }}" \
             --resource-group "${{ vars.RESOURCE_GROUP }}" \
-            --image "$SERVER/upload-app:${{ github.sha }}"
+            --image "$SERVER/upload-app:${{ github.sha }}" \
+            --registry-server "$SERVER" \
+            --registry-identity system
           echo "Deployed $SERVER/upload-app:${{ github.sha }}"

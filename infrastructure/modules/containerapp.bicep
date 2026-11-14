@@ -77,14 +77,14 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
           value: uploadToken
         }
       ]
-      registries: [
-        {
-          server: acr.properties.loginServer
-          // pull auth uses THIS app's system-assigned identity ('system'),
-          // which gets AcrPull on the registry in modules/rbac.bicep
-          identity: 'system'
-        }
-      ]
+      // NOTE: no `registries` entry here on purpose. The placeholder image is
+      // public (MCR), and declaring the ACR with identity 'system' would make the
+      // platform mint an ACR token at first-revision time — but AcrPull for the
+      // app identity is only assigned by modules/rbac.bicep AFTER this module
+      // completes (chicken-and-egg -> "Operation expired"). Instead,
+      // containerapp-deploy.yml adds the registry credential together with the
+      // real image (`--registry-server ... --registry-identity system`), by which
+      // time rbac.bicep has granted AcrPull.
     }
     template: {
       containers: [

@@ -99,8 +99,10 @@ resource raCappStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // Container APP identity -> AcrPull on the registry (image pulls). The registry
-// entry in containerapp.bicep uses identity 'system' = the app's system-assigned
-// identity, so the role must be on the app principal, not the environment.
+// entry with identity 'system' (the app's system-assigned identity) is added by
+// containerapp-deploy.yml when it switches to the ACR image — NOT in
+// containerapp.bicep, because the first revision (public placeholder image) must
+// provision before this role assignment can exist (chicken-and-egg).
 resource raCappAcr 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(acr.id, containerAppPrincipalId, roles.acrPull)
   scope: acr
