@@ -316,6 +316,14 @@ else
     gh variable set LOCATION              --repo "$REPO" --body "$LOC"      && \
     gh variable set DEPLOYMENT_NAME       --repo "$REPO" --body "clc3-2026" \
       && info "variables set: AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, RESOURCE_GROUP=$RG_NAME, LOCATION=$LOC, DEPLOYMENT_NAME=clc3-2026"
+    # --- default workflow permissions: read/write is required so the
+    # infra-deploy workflow's GITHUB_TOKEN may create repo variables (gh variable set) ---
+    if gh api -X PUT "repos/$REPO/actions/permissions/workflow" -f default_workflow_permissions=write >/dev/null 2>&1; then
+      info "repo default workflow permissions set to read/write (needed by infra-deploy to publish repo variables)"
+    else
+      warn "could not set default workflow permissions to read/write — do it manually: gh api -X PUT repos/$REPO/actions/permissions/workflow -f default_workflow_permissions=write  (or via repo Settings > Actions > General > Workflow permissions)"
+    fi
+
     info "The remaining variables (FUNCTION_APP_NAME, STORAGE_ACCOUNT_NAME, IMAGE_CONTAINER_NAME, ACR_NAME, CONTAINER_APP_NAME) are set automatically by the infra-deploy workflow from the deployment outputs."
 
     info "SECURITY: AZURE_CLI_TOKENS carries YOUR credentials (Owner on your own subscription). Keep the fork PRIVATE and give write access only to yourself — anyone with write access to the repo can read secrets through a workflow. GitHub masks the value in logs."
