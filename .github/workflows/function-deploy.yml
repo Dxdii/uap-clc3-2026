@@ -78,7 +78,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Publish function app (local build — Flex has no remote build)
-        run: func azure functionapp publish "${{ steps.infra.outputs.FUNCTION_APP_NAME }}" --build local
+        # --python: pin the worker language explicitly (func's auto-detection
+        # failed on the runner with "Can't determine project language")
+        run: func azure functionapp publish "${{ steps.infra.outputs.FUNCTION_APP_NAME }}" --python --build local
 
       # The Event-Grid-sourced BLOB trigger receives events at the blob
       # extension webhook (NOT an azurefunction endpoint — that is only for
