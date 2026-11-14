@@ -48,6 +48,13 @@ param modelCapacity int = 1
 @description('Name of the model deployment inside Foundry (used as the model name in SDK calls).')
 param modelDeploymentName string = 'gpt-4o-mini'
 
+@description('Upload-app container image. Default = public placeholder listening on 8080. Set to <acr>.azurecr.io/upload-app:latest to keep the deployed app across infra redeploys (infra-deploy.yml does this automatically when the tag exists).')
+param uploadAppImage string = 'nginxinc/nginx-unprivileged:latest'
+
+@description('Shared token for the upload endpoint (X-Upload-Token header). Random per deployment unless you set it explicitly; retrieve via the secure deployment output.')
+@secure()
+param uploadToken string = newGuid()
+
 var tags = {
   exercise: 'uap-clc3-2026'
   deployedBy: 'bicep'
@@ -146,6 +153,8 @@ module containerApp 'modules/containerapp.bicep' = {
     workspaceSharedKey: monitoring.outputs.workspaceSharedKey
     storageAccountName: storage.outputs.storageAccountName
     imageContainerName: storage.outputs.imageContainerName
+    uploadAppImage: uploadAppImage
+    uploadToken: uploadToken
   }
 }
 
@@ -190,3 +199,7 @@ output cosmosContainerName string = cosmos.outputs.containerName
 output storageAccountName string = storage.outputs.storageAccountName
 output imageContainerName string = storage.outputs.imageContainerName
 output acrLoginServer string = containerApp.outputs.acrLoginServer
+// secure output: readable via API/CLI query (az deployment sub show --query
+// "properties.outputs.uploadToken.value" -o tsv) but masked in plain output
+@secure()
+output uploadToken string = uploadToken

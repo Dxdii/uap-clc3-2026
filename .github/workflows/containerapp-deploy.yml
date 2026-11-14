@@ -34,6 +34,7 @@ jobs:
           az acr build \
             --registry "${{ vars.ACR_NAME }}" \
             --image "upload-app:${{ github.sha }}" \
+            --image "upload-app:latest" \
             --file src/upload-app/Dockerfile \
             src/upload-app
           az containerapp update \

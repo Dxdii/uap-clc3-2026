@@ -24,10 +24,15 @@ regions. The set is **different per student subscription**.
   ```bash
   SUB=$(az account show --query id -o tsv)
   az policy assignment list --scope "/subscriptions/$SUB" -o json \
-    | jq -r '.[] | select(.properties.displayName | test("allowed"; "i")) | .name'
-  # then, per assignment name:
-  az policy assignment show --name <name> --scope "/subscriptions/$SUB" \
-    --query "properties.parameters.listOfAllowedLocations.value" -o tsv
+    | jq -r '.[] | . as $a
+             | select((($a.properties.policyDefinitionId // $a.policyDefinitionId // "") == "/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c")
+                      or ((($a.properties.displayName // $a.displayName // "") | test("allowed"; "i"))))
+             | ($a.name // empty)'
+  # then, per assignment name (note: if SEVERAL assignments match, the effective
+  # allowed set is the INTERSECTION of all their location lists):
+  az policy assignment show --name <name> --scope "/subscriptions/$SUB" -o json \
+    | jq -r '(.properties.parameters // .parameters // {})
+             | (.listOfAllowedLocations.value // .allowedLocations.value // .listOfAllowedLocation.value // empty) | .[]?'
   ```
 
 ## 2. Which of those regions actually offer the services we need?

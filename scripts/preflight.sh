@@ -63,10 +63,12 @@ info "Step 1: reading 'Allowed resource deployment regions' policy assignment ..
 ALLOWED="$TMPD/allowed.txt"; : > "$ALLOWED"
 POLICY_STATE="unknown"
 if az policy assignment list --scope "/subscriptions/$SUB" -o json > "$TMPD/assignments.json" 2>"$TMPD/assignments.err"; then
+  # tolerate both response shapes: fields under .properties (list) or top-level
   jq -r --arg def "$POLICY_DEF_ID" '
-    .[] | select(.properties.policyDefinitionId == $def
-                 or (.properties.displayName | test("allowed (resource deployment )?regions|allowed locations"; "i")))
-       | .name' "$TMPD/assignments.json" > "$TMPD/assignment_names.txt" 2>/dev/null || true
+    .[] | . as $a
+    | select((($a.properties.policyDefinitionId // $a.policyDefinitionId // "") == $def)
+             or ((($a.properties.displayName // $a.displayName // "") | test("allowed (resource deployment )?regions|allowed locations"; "i"))))
+    | ($a.name // empty)' "$TMPD/assignments.json" > "$TMPD/assignment_names.txt" 2>/dev/null || true
   # Azure enforces ALL matching allowed-location assignments together, so the
   # effective allowed set is the INTERSECTION across assignments (not a union).
   n=0; READ_FAIL=0
@@ -74,9 +76,9 @@ if az policy assignment list --scope "/subscriptions/$SUB" -o json > "$TMPD/assi
     [ -z "$aname" ] && continue
     n=$((n+1))
     if az policy assignment show --name "$aname" --scope "/subscriptions/$SUB" -o json 2>/dev/null \
-       | jq -r '.properties.parameters
+       | jq -r '(.properties.parameters // .parameters // {})
                   | (.listOfAllowedLocations.value // .allowedLocations.value // .listOfAllowedLocation.value // empty)
-                  | .[]?' > "$TMPD/policy_$n.txt" && [ -s "$TMPD/policy_$n.txt" ]; then
+                  | .[]?' 2>/dev/null > "$TMPD/policy_$n.txt" && [ -s "$TMPD/policy_$n.txt" ]; then
       :
     else
       READ_FAIL=1

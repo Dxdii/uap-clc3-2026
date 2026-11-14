@@ -12,6 +12,13 @@ param workspaceSharedKey string // Log Analytics shared key for the ACA environm
 param storageAccountName string
 param imageContainerName string
 
+@description('Image of the upload app. Defaults to a public placeholder that listens on 8080 (ingress targetPort); infra-deploy passes the ACR image once it has been pushed, so infra redeploys do not reset it.')
+param uploadAppImage string = 'nginxinc/nginx-unprivileged:latest'
+
+@description('Shared token required in the X-Upload-Token header of /upload (stored as an ACA secret, never in code). Defaults to a random GUID per deployment; retrieve it from the deployment outputs.')
+@secure()
+param uploadToken string = newGuid()
+
 var environmentName = 'cae-${nameSuffix}'
 var acrName = 'acr${nameSuffix}'
 var appName = 'ca-upload-${nameSuffix}'
@@ -64,6 +71,12 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
         targetPort: 8080
         transport: 'auto'
       }
+      secrets: [
+        {
+          name: 'upload-token'
+          value: uploadToken
+        }
+      ]
       registries: [
         {
           server: acr.properties.loginServer
@@ -77,8 +90,9 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
       containers: [
         {
           name: 'upload-app'
-          // placeholder image — replaced by CI/CD (containerapp-deploy.yml)
-          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          // placeholder listens on 8080 (matches ingress targetPort); replaced
+          // by the real image via containerapp-deploy.yml / the uploadAppImage param
+          image: uploadAppImage
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -95,6 +109,10 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
             {
               name: 'PORT'
               value: '8080'
+            }
+            {
+              name: 'UPLOAD_TOKEN'
+              secretRef: 'upload-token'
             }
           ]
         }
