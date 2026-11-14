@@ -107,7 +107,9 @@ def analyze_image_bytes(openai_client, deployment_name: str, content_type: str, 
     database_name=COSMOS_DATABASE,
     container_name=COSMOS_CONTAINER,
     connection="COSMOS_CONNECTION",
-    create_if_not_exists=True,
+    # database + container are created by Bicep; with Entra-only (database-scope)
+    # RBAC the binding cannot create them, so never let it try
+    create_if_not_exists=False,
     partition_key="/filename",
 )
 def analyze_image(image: blob_ext.BlobClient, doc: func.Out[func.Document]) -> None:

@@ -51,7 +51,7 @@ param modelDeploymentName string = 'gpt-4o-mini'
 @description('Upload-app container image. Default = public placeholder listening on 8080. Set to <acr>.azurecr.io/upload-app:latest to keep the deployed app across infra redeploys (infra-deploy.yml does this automatically when the tag exists).')
 param uploadAppImage string = 'nginxinc/nginx-unprivileged:latest'
 
-@description('Shared token for the upload endpoint (X-Upload-Token header). Random per deployment unless you set it explicitly; retrieve via the secure deployment output.')
+@description('Shared token for the upload endpoint (X-Upload-Token header). Pass your own (openssl rand -hex 16) so it survives infra redeploys; otherwise a random GUID is used per deployment and must be re-read via "az containerapp secret show".')
 @secure()
 param uploadToken string = newGuid()
 
@@ -60,8 +60,11 @@ var tags = {
   deployedBy: 'bicep'
 }
 
-// short, stable suffix derived from the rg name for globally unique resource names
-var nameSuffix = '${take(replace(toLower(rgName), '-', ''), 10)}${take(uniqueString(rgName), 6)}'
+// short, stable suffix for globally unique resource names.
+// uniqueString() returns hex only -> always valid for storage/ACR/Cosmos names,
+// and keyed by subscription+rgName so two students with the same rgName in
+// different subscriptions cannot collide.
+var nameSuffix = take(uniqueString(subscription().subscriptionId, rgName), 16)
 
 module rg 'modules/resourcegroup.bicep' = {
   name: '${deploymentName}-rg' // distinct from the parent deployment name (ARM forbids self-reference)
@@ -199,7 +202,9 @@ output cosmosContainerName string = cosmos.outputs.containerName
 output storageAccountName string = storage.outputs.storageAccountName
 output imageContainerName string = storage.outputs.imageContainerName
 output acrLoginServer string = containerApp.outputs.acrLoginServer
-// secure output: readable via API/CLI query (az deployment sub show --query
-// "properties.outputs.uploadToken.value" -o tsv) but masked in plain output
-@secure()
-output uploadToken string = uploadToken
+output acrName string = containerApp.outputs.acrName
+output containerAppName string = containerApp.outputs.name
+// NOTE: no output for uploadToken — @secure() output values are stripped from
+// deployment history and NOT retrievable afterwards (verified empirically).
+// Students pass the token explicitly at deploy time (see README step 4) or read
+// it back with: az containerapp secret show -n <app> -g <rg> --secret-name upload-token

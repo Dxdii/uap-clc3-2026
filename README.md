@@ -93,12 +93,18 @@ cannot be created.
 
 ```bash
 cd infrastructure
+# pick your own upload token once and SAVE it (used again in step 7):
+UPLOAD_TOKEN=$(openssl rand -hex 16); echo "your upload token: $UPLOAD_TOKEN"
 az deployment sub create \
   --name clc3-2026 \
   --location <RECOMMENDED LOCATION from step 3> \
   --template-file main.bicep \
-  --parameters rgName=rg-clc3-<your-lastname> location=<RECOMMENDED LOCATION from step 3>
+  --parameters rgName=rg-clc3-<your-lastname> location=<RECOMMENDED LOCATION from step 3> uploadToken=$UPLOAD_TOKEN
 ```
+
+(The token is a `@secure()` parameter, so it is not stored in the deployment history. If you omit it, a
+random one is generated per deployment and you can read it back with
+`az containerapp secret show --name <containerAppName> --resource-group <rg> --secret-name upload-token --query value -o tsv`.)
 
 * Use your **lastname** in the resource group name to avoid collisions with other students.
 * If the deployment fails on **role assignments** (AAD propagation delay), simply **re-run the exact same
@@ -106,9 +112,9 @@ az deployment sub create \
 * If the deployment fails **midway** (e.g. `AKSCapacityHeavyUsage`): a resource group's location is
   immutable — first `az group delete --name <rgName> --yes`, then re-run with a **fresh rgName and a new
   deployment name** (`--name clc3-2026-r2`) in the next candidate region from `scripts/preflight.sh`.
-* The deployment prints outputs at the end: `functionAppName`, `uploadAppFqdn`, `foundryProjectEndpoint`,
-  `cosmosAccountEndpoint`, `acrLoginServer`, ... Save them. The upload token is a **secure** output —
-  fetch it explicitly (step 7 shows how).
+* The deployment prints outputs at the end: `resourceGroupName`, `functionAppName`, `uploadAppFqdn`,
+  `foundryProjectEndpoint`, `cosmosAccountEndpoint`, `storageAccountName`, `imageContainerName`,
+  `acrName`, `acrLoginServer`, `containerAppName`, ... Save them — steps 5–7 use them.
 
 What gets created (all in one resource group, one region): Log Analytics + App Insights, a GPv2 storage
 account with the `imageanalysis` container and an Event Grid system topic, a **Foundry resource
@@ -137,7 +143,8 @@ function, so this must happen after `func ... publish` (the CI workflow does it 
 SUB=$(az account show --query id -o tsv)
 RG=rg-clc3-<your-lastname>
 APP=<functionAppName>
-ST=<storageAccountName from step 4 outputs>
+ST=<storageAccountName>
+HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query defaultHostName -o tsv)
 BLOBS_KEY=$(az rest --method POST \
   --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
   --query systemKeys.blobs_extension -o tsv)
@@ -145,19 +152,30 @@ az eventgrid event-subscription create \
   --source-resource-id "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$ST" \
   --name "sub-$APP-AnalyzeImage" \
   --endpoint-type webhook \
-  --endpoint "https://$APP.azurewebsites.net/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY" \
+  --endpoint "https://$HOST/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY" \
   --included-event-types Microsoft.Storage.BlobCreated \
   --subject-begins-with "/blobServices/default/containers/imageanalysis/blobs/"
 ```
 
+(The `blobs_extension` key can take ~a minute to appear after the first publish — if the command above
+returns an empty key, wait and re-run it. If the subscription already exists with an old endpoint,
+delete it first: `az eventgrid event-subscription delete --source-resource-id <storage-id> --name sub-$APP-AnalyzeImage`.)
+
 ## 6. Deploy the upload Container App
 
-Build the image into your ACR and update the app:
+Build the image **locally with Docker** and push it to your ACR. Do NOT use `az acr build` — ACR Tasks
+are blocked on Azure for Students subscriptions (`TasksOperationsNotAllowed`) and need Standard/Premium
+SKUs. `docker push` with an Azure AD token works on the Basic SKU:
 
 ```bash
-az acr build --registry <acrName from step 4> --image upload-app:latest --file src/upload-app/Dockerfile src/upload-app
+ACR=<acrName>            # from step 4 outputs
+SERVER=<acrLoginServer>
+TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
+echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
+docker build -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
+docker push "$SERVER/upload-app:latest"
 az containerapp update --name <containerAppName> --resource-group rg-clc3-<your-lastname> \
-  --image <acrLoginServer>/upload-app:latest
+  --image "$SERVER/upload-app:latest"
 ```
 
 (The CI workflow tags the image with the commit SHA **and** `latest`; `latest` is what infra redeploys
@@ -166,12 +184,11 @@ reuse, so re-running the infra deployment does not reset the app to the placehol
 ## 7. Test end-to-end
 
 The upload endpoint is protected by a shared token (the app has public ingress, so anonymous uploads
-would trigger billable AI calls). Get your token from the deployment outputs and upload:
+would trigger billable AI calls). Use the `$UPLOAD_TOKEN` you chose in step 4 (or read the current one
+back with `az containerapp secret show --name <containerAppName> --resource-group <rg> --secret-name upload-token --query value -o tsv`):
 
 ```bash
-TOKEN=$(az deployment sub show --name clc3-2026 \
-  --query "properties.outputs.uploadToken.value" -o tsv)
-curl -H "X-Upload-Token: $TOKEN" -F "file=@test.jpeg" https://<uploadAppFqdn>/upload
+curl -H "X-Upload-Token: $UPLOAD_TOKEN" -F "file=@test.jpeg" https://<uploadAppFqdn>/upload
 ```
 
 (or use the HTML form at `https://<uploadAppFqdn>/` — it asks for the token — or Postman.
