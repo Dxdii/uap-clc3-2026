@@ -1,27 +1,22 @@
 # Deploys the infrastructure (infrastructure/main.bicep) at subscription scope.
 #
-# Required repo secrets/variables (set once per fork):
-#   Secret  AZURE_CREDENTIALS   service principal JSON. The template creates Azure
-#                               RBAC role assignments (modules/rbac.bicep +
-#                               cosmosdb-rbac.bicep), which need
-#                               "Microsoft.Authorization/roleAssignments/write" —
-#                               so grant BOTH:
-#                                 Contributor                          (deploy resources)
-#                                 Role Based Access Control Administrator (create role assignments)
-#                               at subscription scope, e.g.:
-#                                 az ad sp create-for-rbac --name clc3-2026-deployer \
-#                                   --role Contributor --role "Role Based Access Control Administrator" \
-#                                   --scopes /subscriptions/<sub-id> --sdk-auth
-#                               (On a personal student subscription, Owner already covers both.)
-#   Variable RESOURCE_GROUP     e.g. rg-clc3-<lastname>
-#   Variable LOCATION           region from scripts/preflight.sh (e.g. swedencentral)
-#   Variable DEPLOYMENT_NAME    e.g. clc3-2026
-#   Variable ACR_NAME           (optional, from infra outputs) — when set and the
-#                               'latest' tag exists, infra redeploys keep the pushed
-#                               app image instead of resetting to the placeholder
+# Auth: the student's own az CLI token store, stored as repo secret
+# AZURE_CLI_TOKENS by scripts/preflight.sh (students cannot create service
+# principals in the FH OOe tenant — app registration is disabled there).
+# The login step below decodes the secret into $HOME/.azure on the runner.
 #
-# Preferably replace the secret with OIDC federation (azure/login@v2 supports
-# federated credentials) — see https://learn.microsoft.com/azure/developer/github/connect-from-azure
+# Required repo secrets/variables (set by scripts/preflight.sh):
+#   Secret   AZURE_CLI_TOKENS     base64 tar of the student's ~/.azure token store
+#   Secret   UPLOAD_TOKEN         optional — keeps the upload token stable across redeploys
+#   Variable AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, RESOURCE_GROUP, LOCATION, DEPLOYMENT_NAME
+#
+# The resource names in the deployment outputs (function app, storage, ACR,
+# container app, image container) are NOT written to repo variables by CI —
+# the containerapp/function deploy workflows read them straight from
+# 'az deployment sub show' (they already authenticate with the student token).
+# This workflow only needs to resolve ACR_NAME itself to keep an already-pushed
+# app image across infra redeploys (when the 'latest' tag exists, the
+# placeholder is not re-applied).
 
 name: infra-deploy
 
@@ -32,7 +27,6 @@ on:
     paths: ["infrastructure/**"]
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -41,17 +35,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Login to Azure with the student's az token (repo secret)
+        env:
+          AZURE_CLI_TOKENS: ${{ secrets.AZURE_CLI_TOKENS }}
+        run: |
+          mkdir -p "$HOME/.azure"
+          echo "$AZURE_CLI_TOKENS" | base64 -d | tar -xz -C "$HOME/.azure"
+          az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          az account show --query "{name:name, id:id, user:user.name}" -o json
 
       - name: Resolve app image (keep already-pushed image across infra redeploys)
         id: image
         run: |
           IMG=""
-          if [ -n "${{ vars.ACR_NAME }}" ] \
-             && az acr repository show-tags --name "${{ vars.ACR_NAME }}" --repository upload-app -o tsv 2>/dev/null | grep -qx latest; then
-            IMG="${{ vars.ACR_NAME }}.azurecr.io/upload-app:latest"
+          DEP_NAME="${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}"
+          # ACR name comes from the PREVIOUS deployment's outputs (if any)
+          ACR="$(az deployment sub show --name "$DEP_NAME" --query properties.outputs.acrName.value -o tsv 2>/dev/null || true)"
+          if [ -n "$ACR" ] && [ "$ACR" != "None" ] \
+             && az acr repository show-tags --name "$ACR" --repository upload-app -o tsv 2>/dev/null | grep -qx latest; then
+            IMG="$ACR.azurecr.io/upload-app:latest"
           fi
           echo "image=$IMG" >> "$GITHUB_OUTPUT"
 
@@ -80,3 +82,8 @@ jobs:
           az deployment sub show \
             --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" \
             --query properties.outputs -o json
+
+      # Resource names are read from these outputs by the containerapp/function
+      # deploy workflows via 'az deployment sub show' (see their "Resolve infra
+      # outputs" step) — no repo variables needed, so this workflow only needs
+      # 'contents: read'.

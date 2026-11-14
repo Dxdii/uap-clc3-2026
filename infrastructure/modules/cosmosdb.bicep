@@ -15,7 +15,7 @@ var accountName = 'cosmos-${nameSuffix}'
 var databaseName = 'ImageAnalysis'
 var containerName = 'results'
 
-resource account 'Microsoft.DocumentDB/databaseAccounts@2025-04-01' = {
+resource account 'Microsoft.DocumentDB/databaseAccounts@2025-04-15' = {
   name: accountName
   location: location
   tags: tags
@@ -45,7 +45,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2025-04-01' = {
   }
 }
 
-resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2025-04-01' = {
+resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2025-04-15' = {
   parent: account
   name: databaseName
   properties: {
@@ -55,7 +55,7 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2025-04-01
   }
 }
 
-resource container 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/sqlContainers@2025-04-01' = {
+resource container 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: database
   name: containerName
   properties: {

@@ -12,8 +12,8 @@ param workspaceSharedKey string // Log Analytics shared key for the ACA environm
 param storageAccountName string
 param imageContainerName string
 
-@description('Image of the upload app. Defaults to a public placeholder that listens on 8080 (ingress targetPort); infra-deploy passes the ACR image once it has been pushed, so infra redeploys do not reset it.')
-param uploadAppImage string = 'nginxinc/nginx-unprivileged:latest'
+@description('Image of the upload app. Default = public MCR placeholder (only needs to be pullable; its revision is unhealthy until the real image is pushed). infra-deploy passes the ACR image once pushed, so infra redeploys do not reset it.')
+param uploadAppImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
 @description('Shared token required in the X-Upload-Token header of /upload (stored as an ACA secret, never in code). Pass your own value so it survives redeploys; otherwise a random GUID per deployment. Read back with: az containerapp secret show --secret-name upload-token.')
 @secure()
@@ -23,7 +23,7 @@ var environmentName = 'cae-${nameSuffix}'
 var acrName = 'acr${nameSuffix}'
 var appName = 'ca-upload-${nameSuffix}'
 
-resource acr 'Microsoft.ContainerRegistry/registries@2025-06-01' = {
+resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   name: acrName
   location: location
   tags: tags
@@ -77,20 +77,20 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
           value: uploadToken
         }
       ]
-      registries: [
-        {
-          server: acr.properties.loginServer
-          // pull auth uses THIS app's system-assigned identity ('system'),
-          // which gets AcrPull on the registry in modules/rbac.bicep
-          identity: 'system'
-        }
-      ]
+      // NOTE: no `registries` entry here on purpose. The placeholder image is
+      // public (MCR), and declaring the ACR with identity 'system' would make the
+      // platform mint an ACR token at first-revision time — but AcrPull for the
+      // app identity is only assigned by modules/rbac.bicep AFTER this module
+      // completes (chicken-and-egg -> "Operation expired"). Instead,
+      // containerapp-deploy.yml adds the registry credential together with the
+      // real image (`--registry-server ... --registry-identity system`), by which
+      // time rbac.bicep has granted AcrPull.
     }
     template: {
       containers: [
         {
           name: 'upload-app'
-          // placeholder listens on 8080 (matches ingress targetPort); replaced
+          // placeholder: any pullable image; replaced by the real app via containerapp-deploy
           // by the real image via containerapp-deploy.yml / the uploadAppImage param
           image: uploadAppImage
           resources: {

@@ -1,12 +1,17 @@
 # Builds and deploys the Flex Consumption Python function to the function app
 # created by infra-deploy. Flex Consumption has NO remote build, so the package
-# is built locally on the runner (--build local).
+# is built on the runner (--build local, Python 3.13 — no macOS-wheel issue).
 #
-# Required repo variables:
-#   FUNCTION_APP_NAME      e.g. func-<suffix> (from infra outputs)
-#   RESOURCE_GROUP         e.g. rg-clc3-<lastname>
-#   STORAGE_ACCOUNT_NAME   e.g. st<suffix>  (from infra outputs)
-#   IMAGE_CONTAINER_NAME   e.g. imageanalysis (from infra outputs)
+# Auth: the student's az CLI token store as repo secret AZURE_CLI_TOKENS
+# (set by scripts/preflight.sh — students cannot create service principals
+# in the FH OOe tenant).
+#
+# Required repo secrets/variables:
+#   Secret   AZURE_CLI_TOKENS     (from preflight.sh)
+#   Variable AZURE_SUBSCRIPTION_ID, RESOURCE_GROUP, DEPLOYMENT_NAME
+#   FUNCTION_APP_NAME / STORAGE_ACCOUNT_NAME / IMAGE_CONTAINER_NAME are resolved
+#   from the infra-deploy deployment outputs via 'az deployment sub show'
+#   (run infra-deploy first).
 
 name: function-deploy
 
@@ -17,7 +22,6 @@ on:
     paths: ["src/image-analysis-function/**"]
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -29,9 +33,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Login to Azure with the student's az token (repo secret)
+        env:
+          AZURE_CLI_TOKENS: ${{ secrets.AZURE_CLI_TOKENS }}
+        run: |
+          mkdir -p "$HOME/.azure"
+          echo "$AZURE_CLI_TOKENS" | base64 -d | tar -xz -C "$HOME/.azure"
+          az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          az account show --query "{name:name, id:id, user:user.name}" -o json
+
+      - name: Resolve infra outputs (run infra-deploy first)
+        id: infra
+        run: |
+          if [ -z "${{ vars.RESOURCE_GROUP }}" ]; then
+            echo "::error::RESOURCE_GROUP variable is not set — run scripts/preflight.sh first."
+            exit 1
+          fi
+          DEP_NAME="${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}"
+          OUT="$(az deployment sub show --name "$DEP_NAME" --query properties.outputs -o json 2>/dev/null)" || OUT=""
+          if [ -z "$OUT" ] || [ "$OUT" = "null" ]; then
+            echo "::error::deployment '$DEP_NAME' not found — run the infra-deploy workflow first, then re-run this workflow."
+            exit 1
+          fi
+          APP="$(jq -r .functionAppName.value <<<"$OUT")"
+          ST="$(jq -r .storageAccountName.value <<<"$OUT")"
+          IMG="$(jq -r .imageContainerName.value <<<"$OUT")"
+          if [ -z "$APP" ] || [ "$APP" = "null" ] || [ -z "$ST" ] || [ "$ST" = "null" ] || [ -z "$IMG" ] || [ "$IMG" = "null" ]; then
+            echo "::error::deployment outputs missing functionAppName/storageAccountName/imageContainerName — re-run the infra-deploy workflow."
+            exit 1
+          fi
+          echo "FUNCTION_APP_NAME=$APP" >> "$GITHUB_OUTPUT"
+          echo "STORAGE_ACCOUNT_NAME=$ST" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_CONTAINER_NAME=$IMG" >> "$GITHUB_OUTPUT"
+          echo "resolved FUNCTION_APP_NAME=$APP STORAGE_ACCOUNT_NAME=$ST IMAGE_CONTAINER_NAME=$IMG"
 
       - uses: actions/setup-python@v5
         with:
@@ -44,7 +78,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Publish function app (local build — Flex has no remote build)
-        run: func azure functionapp publish "${{ vars.FUNCTION_APP_NAME }}" --build local
+        # --python: pin the worker language explicitly (func's auto-detection
+        # failed on the runner with "Can't determine project language")
+        run: func azure functionapp publish "${{ steps.infra.outputs.FUNCTION_APP_NAME }}" --python --build local
 
       # The Event-Grid-sourced BLOB trigger receives events at the blob
       # extension webhook (NOT an azurefunction endpoint — that is only for
@@ -56,10 +92,10 @@ jobs:
         run: |
           SUB_ID="$(az account show --query id -o tsv)"
           RG="${{ vars.RESOURCE_GROUP }}"
-          APP="${{ vars.FUNCTION_APP_NAME }}"
-          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
+          APP="${{ steps.infra.outputs.FUNCTION_APP_NAME }}"
+          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ steps.infra.outputs.STORAGE_ACCOUNT_NAME }}"
           SUB_NAME="sub-$APP-AnalyzeImage"
-          HOST="$(az functionapp show --name "$APP" --resource-group "$RG" --query defaultHostName -o tsv)"
+          HOST="$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)"
           # the blobs_extension system key can take a moment to appear after publish -> retry
           BLOBS_KEY=""
           for i in $(seq 1 10); do
@@ -86,11 +122,11 @@ jobs:
               az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
                 --endpoint-type webhook --endpoint "$ENDPOINT" \
                 --included-event-types Microsoft.Storage.BlobCreated \
-                --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+                --subject-begins-with "/blobServices/default/containers/${{ steps.infra.outputs.IMAGE_CONTAINER_NAME }}/blobs/"
             fi
           else
             az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
               --endpoint-type webhook --endpoint "$ENDPOINT" \
               --included-event-types Microsoft.Storage.BlobCreated \
-              --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+              --subject-begins-with "/blobServices/default/containers/${{ steps.infra.outputs.IMAGE_CONTAINER_NAME }}/blobs/"
           fi

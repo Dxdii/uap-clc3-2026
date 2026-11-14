@@ -11,7 +11,7 @@ Flow:
 App settings (set by infrastructure/modules/function.bicep):
   AzureWebJobsStorage__*        identity-based host/trigger storage connection
   FOUNDRY_PROJECT_ENDPOINT      https://<ais>.services.ai.azure.com/api/projects/<project>
-  FOUNDRY_MODEL_DEPLOYMENT      e.g. gpt-4o-mini
+  FOUNDRY_MODEL_DEPLOYMENT      e.g. gpt-5-mini
   COSMOS_CONNECTION__*          identity-based Cosmos DB connection
 
 Local development (local.settings.json, see local.settings.example.json):
@@ -87,8 +87,9 @@ def analyze_image_bytes(openai_client, deployment_name: str, content_type: str, 
                 ],
             },
         ],
-        temperature=0.2,
-        max_tokens=800,
+        # gpt-5 family: 'max_tokens' was renamed to 'max_completion_tokens' and
+        # only the default temperature (1) is supported — do not pass temperature.
+        max_completion_tokens=800,
         response_format={"type": "json_object"},
     )
     content = response.choices[0].message.content

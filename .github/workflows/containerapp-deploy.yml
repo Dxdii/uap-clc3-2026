@@ -1,16 +1,21 @@
-# Builds the upload app image LOCALLY, pushes it to the ACR created by
+# Builds the upload app image on the runner, pushes it to the ACR created by
 # infra-deploy, and updates the Container App to the new image.
 #
 # NOTE: `az acr build` (ACR Tasks) is NOT used on purpose — ACR Tasks are
 # blocked on Azure for Students / free-credit subscriptions
-# (TasksOperationsNotAllowed) and require Standard/Premium SKUs. A local
+# (TasksOperationsNotAllowed) and require Standard/Premium SKUs. A runner-side
 # `docker build` + `docker push` with an `az acr login --expose-token` token
-# (your Azure AD identity, AcrPush via Contributor/Owner) works everywhere.
+# (the student's Azure AD identity, AcrPush via Owner) works everywhere.
 #
-# Required repo variables:
-#   RESOURCE_GROUP      e.g. rg-clc3-<lastname>
-#   ACR_NAME            e.g. acr<suffix>   (from infra outputs)
-#   CONTAINER_APP_NAME  e.g. ca-upload-<suffix>
+# Auth: the student's az CLI token store as repo secret AZURE_CLI_TOKENS
+# (set by scripts/preflight.sh — students cannot create service principals
+# in the FH OOe tenant).
+#
+# Required repo secrets/variables:
+#   Secret   AZURE_CLI_TOKENS     (from preflight.sh)
+#   Variable AZURE_SUBSCRIPTION_ID, RESOURCE_GROUP, DEPLOYMENT_NAME
+#   ACR_NAME / CONTAINER_APP_NAME are resolved from the infra-deploy deployment
+#   outputs via 'az deployment sub show' (run infra-deploy first).
 
 name: containerapp-deploy
 
@@ -21,7 +26,6 @@ on:
     paths: ["src/upload-app/**"]
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -30,27 +34,65 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Login to Azure with the student's az token (repo secret)
+        env:
+          AZURE_CLI_TOKENS: ${{ secrets.AZURE_CLI_TOKENS }}
+        run: |
+          mkdir -p "$HOME/.azure"
+          echo "$AZURE_CLI_TOKENS" | base64 -d | tar -xz -C "$HOME/.azure"
+          az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          az account show --query "{name:name, id:id, user:user.name}" -o json
+
+      - name: Resolve infra outputs (run infra-deploy first)
+        id: infra
+        run: |
+          if [ -z "${{ vars.RESOURCE_GROUP }}" ]; then
+            echo "::error::RESOURCE_GROUP variable is not set — run scripts/preflight.sh first."
+            exit 1
+          fi
+          DEP_NAME="${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}"
+          OUT="$(az deployment sub show --name "$DEP_NAME" --query properties.outputs -o json 2>/dev/null)" || OUT=""
+          if [ -z "$OUT" ] || [ "$OUT" = "null" ]; then
+            echo "::error::deployment '$DEP_NAME' not found — run the infra-deploy workflow first, then re-run this workflow."
+            exit 1
+          fi
+          ACR="$(jq -r .acrName.value <<<"$OUT")"
+          APP="$(jq -r .containerAppName.value <<<"$OUT")"
+          if [ -z "$ACR" ] || [ "$ACR" = "null" ] || [ -z "$APP" ] || [ "$APP" = "null" ]; then
+            echo "::error::deployment outputs missing acrName/containerAppName — re-run the infra-deploy workflow."
+            exit 1
+          fi
+          echo "ACR_NAME=$ACR" >> "$GITHUB_OUTPUT"
+          echo "CONTAINER_APP_NAME=$APP" >> "$GITHUB_OUTPUT"
+          echo "resolved ACR_NAME=$ACR CONTAINER_APP_NAME=$APP"
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to ACR with an Azure AD token (no admin user needed)
         run: |
-          TOKEN="$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --query accessToken -o tsv)"
-          echo "$TOKEN" | docker login "${{ vars.ACR_NAME }}.azurecr.io" \
+          TOKEN="$(az acr login --name "${{ steps.infra.outputs.ACR_NAME }}" --expose-token --query accessToken -o tsv)"
+          echo "$TOKEN" | docker login "${{ steps.infra.outputs.ACR_NAME }}.azurecr.io" \
             -u 00000000-0000-0000-0000-000000000000 --password-stdin
 
       - name: Build and push image, update container app
         run: |
-          SERVER="${{ vars.ACR_NAME }}.azurecr.io"
+          SERVER="${{ steps.infra.outputs.ACR_NAME }}.azurecr.io"
           docker build -t "$SERVER/upload-app:${{ github.sha }}" -t "$SERVER/upload-app:latest" \
             -f src/upload-app/Dockerfile src/upload-app
           docker push "$SERVER/upload-app:${{ github.sha }}"
           docker push "$SERVER/upload-app:latest"
+          # Pull auth for the ACR image uses the app's system-assigned identity
+          # ('system'), which infra-deploy's rbac module granted AcrPull. The app
+          # is created WITHOUT a registry entry so its first revision can
+          # provision with the public placeholder image before any role
+          # assignment exists (chicken-and-egg otherwise).
+          az containerapp registry set \
+            --name "${{ steps.infra.outputs.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" \
+            --server "$SERVER" \
+            --identity system
           az containerapp update \
-            --name "${{ vars.CONTAINER_APP_NAME }}" \
+            --name "${{ steps.infra.outputs.CONTAINER_APP_NAME }}" \
             --resource-group "${{ vars.RESOURCE_GROUP }}" \
             --image "$SERVER/upload-app:${{ github.sha }}"
           echo "Deployed $SERVER/upload-app:${{ github.sha }}"

@@ -9,7 +9,7 @@ you ──POST image──▶ Container App (upload) ──▶ Blob Storage ('im
                                                           │ BlobCreated event (Event Grid)
                                                           ▼
                                         Flex Consumption Function 'AnalyzeImage'
-                                        (blob input binding → Foundry SDK → gpt-4o-mini)
+                                        (blob input binding → Foundry SDK → gpt-5-mini)
                                                           │
                                                           ▼ Cosmos DB output binding
                                         Cosmos DB 'ImageAnalysis' / 'results'
@@ -53,8 +53,18 @@ per region. Discover both before deploying anything:
 ```bash
 az login                                  # browser/device-code login
 az account set --subscription <id>        # select your Azure for Students subscription
-bash scripts/preflight.sh                 # prints candidate regions + gpt-4o-mini quota + RECOMMENDED LOCATION
+gh auth login                             # GitHub CLI, once — used by preflight to configure your fork
+bash scripts/preflight.sh                 # prints candidate regions + gpt-5-mini quota + RECOMMENDED LOCATION
+                                      # AND wires GitHub Actions in your fork (repo secret + variables, step 6)
 ```
+
+Step 6 of the script needs your fork as the git `origin` remote. It stores your az CLI token store as the
+repo **secret** `AZURE_CLI_TOKENS` (the workflows use it to authenticate — students cannot create service
+principals in the FH OOe tenant, app registration is disabled there) and sets the repo variables
+`RESOURCE_GROUP`, `LOCATION`, `DEPLOYMENT_NAME`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID` plus the secret
+`UPLOAD_TOKEN`. Keep the fork **private** — the secret carries your own subscription credentials.
+Use `--skip-gh` to run only the region/quota checks; the manual equivalent is in
+[`scripts/README.md`](scripts/README.md) section 6.
 
 If the script cannot run a check automatically, it prints the manual step — the authoritative manual
 instructions are in [`scripts/README.md`](scripts/README.md):
@@ -62,7 +72,7 @@ instructions are in [`scripts/README.md`](scripts/README.md):
 1. **Allowed regions:** portal → Subscriptions → your subscription → **Policies** → **Assignments** →
    *Allowed resource deployment regions* → read `listOfAllowedLocations`.
 2. **Service regions:** `az functionapp list-flexconsumption-locations`, `az provider show ...` (see script).
-3. **Model quota (gpt-4o-mini TPM):** Foundry portal https://ai.azure.com → **Management center** → **Quota**,
+3. **Model quota (gpt-5-mini TPM):** Foundry portal https://ai.azure.com → **Management center** → **Quota**,
    or CLI `az cognitiveservices usage list --location <region>`. If quota is **0 TPM**: request an increase
    (approval on student subscriptions is *not* guaranteed) or pick another allowed region
    (commonly `swedencentral`, `francecentral`, `eastus2`).
@@ -93,8 +103,9 @@ cannot be created.
 
 ```bash
 # run from the REPO ROOT
-# pick your own upload token once and SAVE it (used again in step 7):
-UPLOAD_TOKEN=$(openssl rand -hex 16); echo "your upload token: $UPLOAD_TOKEN"
+# use the UPLOAD_TOKEN printed by preflight.sh step 6 (it is also stored as the
+# UPLOAD_TOKEN repo secret so CI redeploys keep it stable); or generate your own:
+#   UPLOAD_TOKEN=$(openssl rand -hex 16); echo "your upload token: $UPLOAD_TOKEN"
 az deployment sub create \
   --name clc3-2026 \
   --location <RECOMMENDED LOCATION from step 3> \
@@ -118,7 +129,7 @@ random one is generated per deployment and you can read it back with
 
 What gets created (all in one resource group, one region): Log Analytics + App Insights, a GPv2 storage
 account with the `imageanalysis` container and an Event Grid system topic, a **Foundry resource
-(AIServices) with project `clc3-project` and a `gpt-4o-mini` deployment**, a **serverless Cosmos DB**
+(AIServices) with project `clc3-project` and a `gpt-5-mini` deployment**, a **serverless Cosmos DB**
 (database `ImageAnalysis`, container `results`, partition key `/filename`), a **Flex Consumption
 function app** (`func-...`), a **Container Apps environment + ACR + upload app** (placeholder image
 listening on 8080), and all RBAC role assignments. The Event Grid **subscription** to the function is
@@ -135,6 +146,21 @@ func azure functionapp publish <functionAppName from step 4 outputs> --build loc
 Flex Consumption has **no remote build**, hence `--build local`. Then check the portal: resource group →
 function app → **Functions** → you should see `AnalyzeImage` (trigger: Blob, enabled).
 
+> **macOS gotcha (Apple Silicon):** `func ... publish --build local` runs `pip download` *without* a
+> `--platform` flag, so on macOS it packages **macOS wheels** into `.python_packages`. The Linux host
+> then fails with `invalid ELF header` and loads **0 functions**. Fix: pre-build the packages for
+> Linux and let `func` skip its own restore, or build inside a Linux container:
+> ```bash
+> # option A — pre-build Linux wheels (func will then say ".python_packages already in sync")
+> rm -rf .python_packages && mkdir -p .python_packages/lib/site-packages
+> pip install --platform manylinux2014_x86_64 --python-version 3.13 --abi cp313 \
+>   --only-binary=:all: --target .python_packages/lib/site-packages -r requirements.txt
+> func azure functionapp publish <app> --build local
+> # option B — run func inside a Linux container (needs your az login + func inside the image)
+> ```
+> Also match the local Python **minor version** to the app (3.13) — a 3.14 local build against a
+> 3.13 app only warns, but the ELF issue above is the real breaker.
+
 **Create the Event Grid subscription (after the code is published!)** — the blob trigger uses the
 Event Grid source, and its endpoint is the *blob extension webhook*, validated against the published
 function, so this must happen after `func ... publish` (the CI workflow does it automatically):
@@ -144,7 +170,7 @@ SUB=$(az account show --query id -o tsv)
 RG=rg-clc3-<your-lastname>
 APP=<functionAppName>
 ST=<storageAccountName>
-HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query defaultHostName -o tsv)
+HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)
 BLOBS_KEY=$(az rest --method POST \
   --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
   --query systemKeys.blobs_extension -o tsv)
@@ -172,11 +198,15 @@ ACR=<acrName>            # from step 4 outputs
 SERVER=<acrLoginServer>
 TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
 echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
-docker build -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
+docker build --platform linux/amd64 -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
 docker push "$SERVER/upload-app:latest"
 az containerapp update --name <containerAppName> --resource-group rg-clc3-<your-lastname> \
   --image "$SERVER/upload-app:latest"
 ```
+
+> **macOS gotcha (Apple Silicon):** always pass `--platform linux/amd64` to `docker build`.
+> Container Apps run on linux/amd64 nodes; pushing an arm64-only image succeeds, but the revision
+> then fails with `ImagePullBackOff` / "no matching manifest … not found" (verified live).
 
 (The CI workflow tags the image with the commit SHA **and** `latest`; `latest` is what infra redeploys
 reuse, so re-running the infra deployment does not reset the app to the placeholder image.)
@@ -202,24 +232,33 @@ Then verify:
 3. **Cosmos DB:** portal → Cosmos DB account → Data Explorer → `ImageAnalysis` → `results` →
    a document with `id`/`filename` = your image name and the `analysis` JSON from the model.
 
-## 8. CI/CD (optional but recommended)
+## 8. CI/CD (configured automatically by preflight)
 
-The workflows in `.github/workflows/` deploy infra, function and container app on push to `main`.
-Set these in your fork (Settings → Secrets and variables → Actions):
+The workflows in `.github/workflows/` deploy infra, function and container app on push to `main`:
 
-* Secret `AZURE_CREDENTIALS` — service principal JSON. The infra template creates RBAC role
-  assignments, so the SP needs **both** `Contributor` and `Role Based Access Control Administrator`
-  at subscription scope (plain Contributor fails with AuthorizationFailed on the role assignments):
-  ```bash
-  az ad sp create-for-rbac --name clc3-2026-deployer \
-    --role Contributor --role "Role Based Access Control Administrator" \
-    --scopes /subscriptions/<your-sub-id> --sdk-auth
-  ```
-  (Even better: replace it with OIDC federation, see the comment in the workflow file.)
-* Variables: `RESOURCE_GROUP`, `LOCATION`, `DEPLOYMENT_NAME`, `FUNCTION_APP_NAME`, `STORAGE_ACCOUNT_NAME`,
-  `IMAGE_CONTAINER_NAME`, `ACR_NAME`, `CONTAINER_APP_NAME` (values from the infra deployment outputs).
-* Secret `UPLOAD_TOKEN` (optional but recommended): set it to the same token you used in step 4, so CI
-  infra redeploys keep the upload token stable instead of rotating it.
+* `infra-deploy.yml` — Bicep at subscription scope. The other workflows read the resource names
+  (`functionAppName`, `storageAccountName`, `imageContainerName`, `acrName`, `containerAppName`)
+  directly from the deployment outputs via `az deployment sub show`, so no extra repo variables
+  are needed.
+* `containerapp-deploy.yml` — builds the upload-app image **on the runner** and pushes it to your ACR
+  (`az acr build` is not used: ACR Tasks are blocked on student subscriptions), then updates the Container App.
+* `function-deploy.yml` — `func azure functionapp publish --build local` (Flex has no remote build) and
+  creates/updates the Event Grid blob webhook subscription.
+
+**Authentication:** students cannot create service principals in the FH OOe tenant (app registration is
+disabled — verified with `az ad app create`: "Insufficient privileges"). Therefore `preflight.sh` step 6
+stores your az CLI token store (base64 tar of `~/.azure/msal_token_cache.json` + `azureProfile.json`) as the
+repo **secret `AZURE_CLI_TOKENS`**; each workflow decodes it into `$HOME/.azure` on the runner and runs
+`az account set`. Set by preflight: secrets `AZURE_CLI_TOKENS`, `UPLOAD_TOKEN`; variables `AZURE_SUBSCRIPTION_ID`,
+`AZURE_TENANT_ID`, `RESOURCE_GROUP`, `LOCATION`, `DEPLOYMENT_NAME`.
+
+> **Security:** the secret carries *your* credentials (Owner on your own subscription). Keep the fork
+> **private** and never grant write access to others — anyone with write access can read secrets via a
+> workflow run. GitHub masks secret values in logs. The refresh token lasts ~90 days; re-run
+> `bash scripts/preflight.sh` to refresh it.
+>
+> If the workflows can't authenticate (e.g. token expired), re-run preflight step 6. Manual equivalent:
+> [`scripts/README.md`](scripts/README.md) section 6.
 
 ## 9. Expected costs (Azure for Students credit: ~USD 80–100)
 
@@ -228,7 +267,7 @@ Set these in your fork (Settings → Secrets and variables → Actions):
 | ACR (Basic) | **$0.17/day** — the only fixed cost | ~$2.50 for 2 weeks, ~$5/month |
 | Container App | free grant (180k vCPU-s, 360k GiB-s, 2M requests/month); scales to zero | ≈ $0 |
 | Flex Consumption function | free grant (250k executions + 100k GB-s/month) | ≈ $0 |
-| gpt-4o-mini | $0.15/1M input + $0.60/1M output tokens | ≈ **$0.001 per image** |
+| gpt-5-mini | ~$0.25/1M input + ~$2.00/1M output tokens | ≈ **$0.002 per image** |
 | Cosmos DB (serverless) | $0.25 per million RUs | ≈ $0 |
 | Storage / Event Grid / logs | pennies; first 100k events + 5 GB logs free | ≈ $0 |
 

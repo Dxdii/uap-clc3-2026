@@ -58,7 +58,7 @@ If your allowed set contains no Foundry-capable region at all, open a
 region-access support request (portal → Help + support) — see
 https://learn.microsoft.com/answers/questions/5916405.
 
-## 3. Do you have model quota (gpt-4o-mini TPM) in that region?
+## 3. Do you have model quota (gpt-5-mini TPM) in that region?
 
 Quota is per subscription + region + model. On student subscriptions the default
 is often **0 TPM**, and increase requests are frequently denied.
@@ -66,7 +66,7 @@ is often **0 TPM**, and increase requests are frequently denied.
 - **CLI:**
   ```bash
   az cognitiveservices usage list --location <region> -o json \
-    | jq '[.[] | select(.name.value | test("gpt-4o-mini"; "i")) | {name: .name.value, used: .currentValue, limit: .limit}]'
+    | jq '[.[] | select(.name.value | test("gpt-5-mini"; "i")) | {name: .name.value, used: .currentValue, limit: .limit}]'
   ```
   (Requires `Reader`/`Cognitive Services Usages Reader` on the subscription —
   you are Owner on your own student subscription.)
@@ -75,8 +75,8 @@ is often **0 TPM**, and increase requests are frequently denied.
   az rest --method get --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.CognitiveServices/quotaTiers?api-version=2025-10-01-preview"
   ```
 - **Foundry portal (per-region model quota):** https://ai.azure.com →
-  **Management center** → **Quota** → find gpt-4o-mini in your candidate region.
-  Alternative: **Models + endpoints** → **Deploy model** → gpt-4o-mini → the
+  **Management center** → **Quota** → find gpt-5-mini in your candidate region.
+  Alternative: **Models + endpoints** → **Deploy model** → gpt-5-mini → the
   region dropdown shows available quota per region.
 - If quota is **0**: click **Request quota increase** in the Quota page (approval
   on student subscriptions is not guaranteed), **or** choose a different allowed
@@ -93,7 +93,7 @@ informational only.)
 ## 5. Pick the location and continue
 
 Choose one region that is in your allowed list AND supports all services AND has
-gpt-4o-mini quota > 0. Use it as the single `location` for the whole deployment:
+gpt-5-mini quota > 0. Use it as the single `location` for the whole deployment:
 
 ```bash
 az deployment sub create --template-file infrastructure/main.bicep \
@@ -117,4 +117,45 @@ fails with `AKSCapacityHeavyUsage` — region capacity exhaustion):
      --parameters rgName=rg-clc3-<lastname>-r2 location=<next-candidate-region>
    ```
    Pick the next candidate region from the `preflight.sh` result table (the one
-   with the most remaining gpt-4o-mini GlobalStandard quota).
+   with the most remaining gpt-5-mini GlobalStandard quota).
+
+## 6. GitHub wiring (manual equivalent of `preflight.sh` step 6)
+
+`preflight.sh` sets these automatically. If you ran it with `--skip-gh`, do this by hand
+(requires the GitHub CLI, `gh auth login` once, and your fork as the `origin` remote):
+
+```bash
+REPO=<owner>/<fork>          # e.g. gh repo view --json nameWithOwner -q .nameWithOwner
+SUB=$(az account show --query id -o tsv)
+TENANT=$(az account show --query tenantId -o tsv)
+RG_NAME=rg-clc3-<lastname>
+LOC=<RECOMMENDED LOCATION from preflight output>
+
+# 1. az CLI token store as repo secret (students cannot create SPs in the FH OOe
+#    tenant — `az ad app create` fails with "Insufficient privileges" there)
+AZHOME="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+FILES="azureProfile.json"
+[ -f "$AZHOME/msal_token_cache.json" ] && FILES="$FILES msal_token_cache.json"
+[ -f "$AZHOME/accessTokens.json" ] && FILES="$FILES accessTokens.json"
+tar -czf - -C "$AZHOME" $FILES | base64 | tr -d '\n' | gh secret set AZURE_CLI_TOKENS --repo "$REPO" --body-file -
+
+# 2. upload token (set once; reused by CI so it does not rotate)
+gh secret set UPLOAD_TOKEN --repo "$REPO" --body "$(openssl rand -hex 16)"   # save the printed value!
+
+# 3. variables used by .github/workflows/
+gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"
+gh variable set AZURE_TENANT_ID       --repo "$REPO" --body "$TENANT"
+gh variable set RESOURCE_GROUP        --repo "$REPO" --body "$RG_NAME"
+gh variable set LOCATION              --repo "$REPO" --body "$LOC"
+gh variable set DEPLOYMENT_NAME       --repo "$REPO" --body "clc3-2026"
+# The deploy workflows resolve the resource names (function app, storage, ACR,
+# container app, image container) from the Azure deployment outputs themselves
+# (`az deployment sub show`) — no extra variables to set.
+```
+
+The workflows decode `AZURE_CLI_TOKENS` into `$HOME/.azure` on the runner (see the "Login to Azure"
+step in each workflow) — the secret never appears in logs (GitHub masks it). Re-run this when the
+token expires (~90 days) or after `az login` on a different account.
+
+Keep the fork **private**: the secret carries your own subscription credentials (Owner on your own
+subscription), and anyone with write access to the repo can read secrets through a workflow.

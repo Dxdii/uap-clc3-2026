@@ -15,7 +15,7 @@ var imageContainerName = 'imageanalysis'
 var deploymentContainerName = 'app-package-${take(functionAppName, 32)}'
 var systemTopicName = 'systopic-${nameSuffix}'
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2025-04-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-06-01' = {
   name: storageAccountName
   location: location
   tags: tags
@@ -36,12 +36,12 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2025-04-01' = {
   }
 }
 
-resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-04-01' = {
+resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-06-01' = {
   parent: storageAccount
   name: 'default'
 }
 
-resource imageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-04-01' = {
+resource imageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-06-01' = {
   parent: blobServices
   name: imageContainerName
   properties: {
@@ -49,7 +49,7 @@ resource imageContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   }
 }
 
-resource webjobsHosts 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-04-01' = {
+resource webjobsHosts 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-06-01' = {
   parent: blobServices
   name: 'azure-webjobs-hosts'
   properties: {
@@ -57,7 +57,7 @@ resource webjobsHosts 'Microsoft.Storage/storageAccounts/blobServices/containers
   }
 }
 
-resource deploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-04-01' = {
+resource deploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-06-01' = {
   parent: blobServices
   name: deploymentContainerName
   properties: {
@@ -66,7 +66,7 @@ resource deploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/con
 }
 
 // cost guardrail: auto-delete uploaded images after 7 days
-resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-08-01' = {
+resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2025-06-01' = {
   parent: storageAccount
   name: 'default'
   properties: {
@@ -100,7 +100,7 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-08
 }
 
 // Event Grid system topic on the storage account (source of BlobCreated events)
-resource systemTopic 'Microsoft.EventGrid/systemTopics@2025-06-01' = {
+resource systemTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' = {
   name: systemTopicName
   location: location
   tags: tags

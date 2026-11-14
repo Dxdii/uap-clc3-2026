@@ -22,11 +22,11 @@ var cosmosDataContributorRoleDefinitionId = resourceId(
 // data-plane scope of the database: /dbs/<name> under the account
 var cosmosDatabaseScope = '${resourceId('Microsoft.DocumentDB/databaseAccounts', cosmosAccountName)}/dbs/${cosmosDatabaseName}'
 
-resource account 'Microsoft.DocumentDB/databaseAccounts@2025-04-01' existing = {
+resource account 'Microsoft.DocumentDB/databaseAccounts@2025-04-15' existing = {
   name: cosmosAccountName
 }
 
-resource sqlRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2025-04-01' = {
+resource sqlRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2025-04-15' = {
   parent: account
   name: guid(cosmosAccountName, functionPrincipalId, 'cosmos-data-contributor')
   properties: {
