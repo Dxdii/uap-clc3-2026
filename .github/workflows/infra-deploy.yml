@@ -62,6 +62,11 @@ jobs:
           if [ -n "${{ steps.image.outputs.image }}" ]; then
             PARAMS+=(uploadAppImage="${{ steps.image.outputs.image }}")
           fi
+          # keep the upload token STABLE across CI infra redeploys (otherwise it
+          # rotates to a new GUID every run and saved tokens stop working)
+          if [ -n "${{ secrets.UPLOAD_TOKEN }}" ]; then
+            PARAMS+=(uploadToken="${{ secrets.UPLOAD_TOKEN }}")
+          fi
           az deployment sub create \
             --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" \
             --location "${{ vars.LOCATION }}" \

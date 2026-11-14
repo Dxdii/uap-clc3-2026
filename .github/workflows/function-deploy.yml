@@ -63,10 +63,13 @@ jobs:
           # the blobs_extension system key can take a moment to appear after publish -> retry
           BLOBS_KEY=""
           for i in $(seq 1 10); do
+            # '|| true' so a 4xx/5xx from listkeys under 'bash -e' doesn't abort the step
             BLOBS_KEY="$(az rest --method POST \
               --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
-              --query systemKeys.blobs_extension -o tsv 2>/dev/null)"
-            [ -n "$BLOBS_KEY" ] && break
+              --query systemKeys.blobs_extension -o tsv 2>/dev/null || true)"
+            # '-o tsv' prints the literal 'None' for a null query result — treat as missing
+            if [ -n "$BLOBS_KEY" ] && [ "$BLOBS_KEY" != "None" ]; then break; fi
+            BLOBS_KEY=""
             echo "blobs_extension key not available yet (attempt $i), waiting 15s ..."
             sleep 15
           done

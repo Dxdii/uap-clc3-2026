@@ -11,14 +11,14 @@
 //   - Azure Functions app on the Flex Consumption plan (FC1) with system identity
 //     (the Event Grid subscription -> function 'AnalyzeImage' is created AFTER the
 //      function code is published — see .github/workflows/function-deploy.yml —
-//      because AzureFunction endpoint validation requires the function to exist)
+//      because the webhook endpoint is validated against the published function)
 //   - Container Apps environment + ACR + upload app (image placeholder)
 //   - All RBAC role assignments (managed identities only, no keys in code)
 //
-// Usage:
+// Usage (from the repo root):
 //   az deployment sub create --template-file infrastructure/main.bicep \
-//     --location <region-from-preflight> \
-//     --parameters deploymentName=clc3-2026 rgName=rg-clc3-<lastname>
+//     --location <region-from-preflight> --name clc3-2026 \
+//     --parameters rgName=rg-clc3-<lastname> location=<region-from-preflight> uploadToken=<random>
 // =============================================================================
 
 targetScope = 'subscription'

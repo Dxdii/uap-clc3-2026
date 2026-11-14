@@ -92,13 +92,13 @@ cannot be created.
 ## 4. Deploy the infrastructure
 
 ```bash
-cd infrastructure
+# run from the REPO ROOT
 # pick your own upload token once and SAVE it (used again in step 7):
 UPLOAD_TOKEN=$(openssl rand -hex 16); echo "your upload token: $UPLOAD_TOKEN"
 az deployment sub create \
   --name clc3-2026 \
   --location <RECOMMENDED LOCATION from step 3> \
-  --template-file main.bicep \
+  --template-file infrastructure/main.bicep \
   --parameters rgName=rg-clc3-<your-lastname> location=<RECOMMENDED LOCATION from step 3> uploadToken=$UPLOAD_TOKEN
 ```
 
@@ -218,6 +218,8 @@ Set these in your fork (Settings → Secrets and variables → Actions):
   (Even better: replace it with OIDC federation, see the comment in the workflow file.)
 * Variables: `RESOURCE_GROUP`, `LOCATION`, `DEPLOYMENT_NAME`, `FUNCTION_APP_NAME`, `STORAGE_ACCOUNT_NAME`,
   `IMAGE_CONTAINER_NAME`, `ACR_NAME`, `CONTAINER_APP_NAME` (values from the infra deployment outputs).
+* Secret `UPLOAD_TOKEN` (optional but recommended): set it to the same token you used in step 4, so CI
+  infra redeploys keep the upload token stable instead of rotating it.
 
 ## 9. Expected costs (Azure for Students credit: ~USD 80–100)
 
