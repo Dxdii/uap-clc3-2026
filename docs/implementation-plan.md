@@ -4,6 +4,8 @@
 **Source example:** https://github.com/juergenbr/fh-clc2025-breitenbaumer (Java 11 Consumption Function App + Logic App + Computer Vision v2.0/v3.2 + Cosmos DB)
 **Working repo:** `repos/uap-clc3-2026` (this repository)
 
+**Diagrams** (rendered by GitHub when opened): [architecture](diagrams/architecture.mermaid) · [infrastructure/Bicep](diagrams/infrastructure.mermaid) · [CI/CD](diagrams/cicd.mermaid) · [observability](diagrams/observability.mermaid)
+
 ## Goals
 
 1. Use the **latest Azure AI services** — Microsoft Foundry (resource + project) with a deployed vision-capable model, called through the **Foundry SDK** (`azure-ai-projects`).
@@ -182,7 +184,7 @@ uap-clc3-2026/
 - **WP0.1 — `scripts/preflight.sh` per Part 6.5**: scripted allowed-regions (Azure Policy), service-region availability (`az provider show`, `az functionapp list-flexconsumption-locations`), model quota (`az cognitiveservices usage list`, quotaTiers REST), compute quota (`az vm list-usage`); defensive (never hard-fails; prints the manual step from `scripts/README.md` when a check can't run); outputs recommended `location`. Test it on a regular (non-student) subscription — no region policy there, so the "no restriction" path must work.
 - Delete/replace: `pom.xml`, `host.json` (v2 bundle), `infrastructure/logicapp_module.bicep`, `infrastructure/function_module.bicep` (Y1 consumption), `src/main/java/**`, `templates/`.
 
-## WP1 — Infrastructure (Bicep), `infrastructure/`
+## WP1 — Infrastructure (Bicep), `infrastructure/` — see [infrastructure diagram](diagrams/infrastructure.mermaid)
 1. `main.bicep` (subscription scope, params `deploymentName`, `rgName`, **`location` (single region for ALL resources — taken from the pre-flight check output in Part 6.5, NOT hard-coded; common student-viable values: `swedencentral`, `francecentral`, `eastus2`, `westeurope` if the policy allows)**, plus model params `modelName` = `gpt-4o-mini`, `modelVersion` = `2024-07-18`, `modelCapacity` = 1) → modules; outputs: function app name, container app FQDN, foundry project endpoint, cosmos endpoint, storage name.
 2. `monitoring.bicep`: Log Analytics (retention 30 days) + App Insights (disableLocalAuth).
 3. `storage.bicep`: StorageV2 account (`allowSharedKeyAccess: false`; all access via identity), container `imageanalysis`, deployment package container, `azure-webjobs-hosts`; **lifecycle rule** deleting blobs older than 7 days; **Event Grid system topic** on the account + **event subscription** (`endpointType: AzureFunction` → function app function `AnalyzeImage`, `includedEventTypes: Microsoft.Storage.BlobCreated`, subject filter `beginsWith /blobServices/default/containers/imageanalysis/blobs/`).
@@ -229,7 +231,7 @@ uap-clc3-2026/
 - Deploy: `func azure functionapp publish <app-name> --build local` (Flex has no remote build); sync triggers; workflow `function-deploy.yml`.
 - Validate: upload via container app → check function logs (App Insights) → query Cosmos (`SELECT * FROM c` in Data Explorer).
 
-## WP4 — CI/CD (`.github/workflows/`)
+## WP4 — CI/CD (`.github/workflows/`) — see [cicd diagram](diagrams/cicd.mermaid)
 - **Auth = student's own az token, no service principal.** Students cannot create app registrations in the
   FH OOe tenant (verified 2026-11-14: `az ad app create` as p61219@fhooe.at → "Directory permission is needed
   … Insufficient privileges"). So `scripts/preflight.sh` step 6 stores the student's az CLI token store
@@ -264,7 +266,7 @@ uap-clc3-2026/
 - Keep the step-by-step portal screenshots where still valid; replace Logic App screenshots with Foundry portal + function binding view.
 - Update `.devcontainer`.
 
-## WP6 — Validation, cost & cleanup
+## WP6 — Validation, cost & cleanup — observability: [diagram](diagrams/observability.mermaid)
 - Acceptance checklist: infra deploys green; function listed in portal with blob trigger (Event Grid) enabled; upload via curl/Postman → document appears in Cosmos within seconds; App Insights shows the execution; ACA returns 200 and blob exists.
 - Observability: `modules/diagnostics.bicep` routes resource logs + `AllMetrics` of storage, Event Grid system topic, Cosmos DB, ACR, Foundry account and the function app (`Microsoft.Web/sites`) into the LA workspace via `Microsoft.Insights/diagnosticSettings` (workspace local auth enabled → no extra RBAC). ACA env logs (`appLogsConfiguration` → log-analytics) and App Insights (workspace-based) already land there. Platform metrics are automatic in Azure Monitor. Foundry `RequestResponse` deliberately off (logs base64 image payloads). Cost: first 5 GB/month free + 30-day retention → $0 at exercise scale. README section "Explore observability" lists ready-to-run KQL.
 - Cost validation: per Part 6 — expected spend ≈ **$3 per student with cleanup after ~14 days; ≈ $20–25 worst case if resources are left running all semester** (dominated by ACR Basic at $0.17/day; everything else is scale-to-zero/serverless/inside free grants; model ≈ $0.001/image). Well below the ~$80 student cap; >10× cheaper per day than the 2025 example (~$2/day).

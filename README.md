@@ -22,6 +22,15 @@ you ──POST image──▶ Container App (upload) ──▶ Blob Storage ('im
   written to **Cosmos DB** via the **output binding**.
 * No keys anywhere in code — everything uses **managed identities (Entra ID)**.
 
+### Diagrams (rendered by GitHub — click to open)
+
+| Diagram | File |
+|---|---|
+| End-to-end architecture & request flow | [architecture](docs/diagrams/architecture.mermaid) |
+| CI/CD pipeline (preflight wiring + 3 workflows, token auth) | [cicd](docs/diagrams/cicd.mermaid) |
+| Infrastructure-as-code (Bicep modules) | [infrastructure](docs/diagrams/infrastructure.mermaid) |
+| Observability (all resources → Log Analytics / Azure Monitor) | [observability](docs/diagrams/observability.mermaid) |
+
 ---
 
 ## 0. Requirements
@@ -234,6 +243,8 @@ Then verify:
 
 ### Explore observability (Azure Monitor / Log Analytics)
 
+See the [observability diagram](docs/diagrams/observability.mermaid).
+
 Every resource ships its logs and metrics to the single Log Analytics workspace (`log-<suffix>`)
 created by the deployment — ACA environment logs and App Insights (function telemetry) were
 already routed there by the bicep; `infrastructure/modules/diagnostics.bicep` adds diagnostic
@@ -283,6 +294,8 @@ the workspace via the `AllMetrics` diagnostic category, queryable as `AzureMetri
 > deliberately **not** enabled; turn it on manually if you want to inspect inference payloads.
 
 ## 8. CI/CD (configured automatically by preflight)
+
+See the [CI/CD diagram](docs/diagrams/cicd.mermaid).
 
 The workflows in `.github/workflows/` deploy infra, function and container app on push to `main`:
 
@@ -357,6 +370,12 @@ soft-deleted Cognitive Services accounts afterwards (see troubleshooting) if you
 
 ```
 ├── docs/implementation-plan.md    detailed design + research + cost validation
+├── docs/validation.md             live test results + pitfalls (E1-E12, C1-C3)
+├── docs/diagrams/                 mermaid diagrams (rendered by GitHub):
+│   ├── architecture.mermaid       end-to-end architecture & request flow
+│   ├── infrastructure.mermaid     Bicep modules -> resource group
+│   ├── cicd.mermaid               preflight wiring + the 3 workflows (token auth)
+│   └── observability.mermaid      all resources -> Log Analytics / Azure Monitor
 ├── scripts/preflight.sh           Step 0: allowed regions + quotas (see scripts/README.md)
 ├── infrastructure/main.bicep      subscription-scope deployment + modules/
 ├── src/upload-app/                Container App (FastAPI) — image upload

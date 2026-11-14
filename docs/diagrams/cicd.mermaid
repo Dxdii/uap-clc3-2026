@@ -1,0 +1,37 @@
+%% CI/CD flow: how a student fork gets wired and how the three workflows deploy.
+%% Auth = the student's az CLI token store as repo secret (no service principal —
+%% app registration is disabled in the FH OOe tenant).
+%% Rendered by GitHub when this file is opened; linked from README.md.
+flowchart LR
+  subgraph local["Student machine"]
+    azlogin["az login<br/>(token store in ~/.azure)"]
+    preflight["scripts/preflight.sh<br/>region/quota checks + step 6 gh wiring"]
+  end
+
+  subgraph gh["GitHub fork (must stay private)"]
+    secret["Secret AZURE_CLI_TOKENS<br/>+ UPLOAD_TOKEN"]
+    vars["Variables AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID,<br/>RESOURCE_GROUP, LOCATION, DEPLOYMENT_NAME"]
+    push(["push to main / workflow_dispatch"])
+  end
+
+  subgraph actions["GitHub Actions (ubuntu-latest)"]
+    login["Login step: decode AZURE_CLI_TOKENS<br/>into $HOME/.azure, az account set"]
+    infra["infra-deploy.yml<br/>az deployment sub create (Bicep, subscription scope)"]
+    caDeploy["containerapp-deploy.yml<br/>docker build + push to ACR (runner-side),<br/>az containerapp registry set + update"]
+    fnDeploy["function-deploy.yml<br/>func publish --python --build local,<br/>Event Grid webhook subscription"]
+  end
+
+  subgraph azure["Azure subscription (student's own)"]
+    resources["resource group rg-clc3-*<br/>+ all exercise resources"]
+  end
+
+  azlogin --> preflight
+  preflight -->|"gh secret set / gh variable set"| secret
+  preflight --> vars
+  push --> login
+  login --> infra
+  infra --> resources
+  infra -->|"resource names read back via<br/>az deployment sub show outputs"| caDeploy
+  infra --> fnDeploy
+  caDeploy --> resources
+  fnDeploy --> resources

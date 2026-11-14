@@ -1,0 +1,28 @@
+%% Observability: every resource ships logs/metrics to the Log Analytics
+%% workspace (or emits platform metrics to Azure Monitor automatically).
+%% Rendered by GitHub when this file is opened; linked from README.md.
+flowchart LR
+  subgraph resources["Exercise resources (rg-clc3-*)"]
+    aca["Container Apps env<br/>appLogsConfiguration -> log-analytics<br/>(ContainerAppConsoleLogs / SystemLogs / HTTPLogs)"]
+    fnapp["Function App<br/>App Insights (workspace-based, AAD) -> AppTraces/AppRequests<br/>+ diagnostic setting: FunctionAppLogs"]
+    st["Storage account<br/>account metrics + blobServices/default child:<br/>StorageRead/Write/Delete -> StorageBlobLogs"]
+    cosmos["Cosmos DB<br/>DataPlaneRequests, QueryRuntimeStatistics,<br/>PartitionKeyStatistics/RUConsumption, ControlPlaneRequests"]
+    acr["ACR<br/>ContainerRegistryLoginEvents / RepositoryEvents"]
+    eg["Event Grid system topic<br/>DeliveryFailures"]
+    cs["Foundry account<br/>Audit, Trace, AzureOpenAIRequestUsage<br/>(RequestResponse off: logs base64 image payloads)"]
+  end
+
+  law["Log Analytics workspace log-*<br/>PerGB2018, 30-day retention, first 5 GB/month free"]
+  am["Azure Monitor<br/>platform metrics automatic for all resources"]
+
+  aca --> law
+  fnapp --> law
+  st -->|"diagnostic settings"| law
+  cosmos -->|"diagnostic settings"| law
+  acr -->|"diagnostic settings"| law
+  eg -->|"diagnostic settings"| law
+  cs -->|"diagnostic settings"| law
+  resources -->|"platform metrics"| am
+
+  law --> portal(["Explore: portal -> LAW Logs (KQL)<br/>or Azure Monitor -> Metrics / App Insights"])
+  am --> portal
