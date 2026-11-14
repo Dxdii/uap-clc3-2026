@@ -1,0 +1,25 @@
+{
+  "name": "uap-clc3-2026 dev environment",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-azuretools.vscode-azurefunctions",
+        "ms-azuretools.vscode-azurecontainerapps",
+        "ms-azuretools.vscode-bicep",
+        "ms-azuretools.vscode-docker",
+        "GitHub.vscode-github-actions"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python3",
+        "azureFunctions.pythonVenv": ".venv"
+      }
+    }
+  },
+  "postCreateCommand": "python3 -m pip install --user --upgrade pip && python3 -m pip install --user -r src/upload-app/requirements.txt -r src/image-analysis-function/requirements-dev.txt 2>/dev/null || true",
+  "remoteUser": "root"
+}
