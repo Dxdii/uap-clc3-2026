@@ -123,3 +123,36 @@ binding with managed identity.
   `az account show`, `az group list` and `az account get-access-token` (refresh path) all succeed.
   Note: current az CLI versions store tokens in `msal_token_cache.json` (not `accessTokens.json`);
   preflight bundles whichever exist.
+
+## CI token-auth live test (2026-11-14, PAYG sub, swedencentral, repo juergenbr/clc3-ci-test)
+
+Full pipeline validated live end to end: preflight step 6 set secrets/variables on a fresh private
+fork → push to `main` triggered `infra-deploy` (token login via `AZURE_CLI_TOKENS` worked on the
+runner) → `containerapp-deploy` and `function-deploy` (dispatched manually) both green →
+`curl -H "X-Upload-Token: …" -F file=@test.jpeg https://<fqdn>/upload` → 200 → Event Grid →
+`AnalyzeImage` executed (Succeeded) → Cosmos `ImageAnalysis/results` contains `id=test.jpeg`
+with the model's JSON analysis (caption/tags/objects/colors).
+
+Findings fixed along the way (all committed on `feature/ci-token-auth`):
+
+* **C1 — ACA chicken-and-egg (critical):** the container app declared the ACR in
+  `configuration.registries` with `identity: 'system'` at creation time, so the platform tried to
+  mint an ACR pull token during first revision provisioning — but AcrPull for the app identity is
+  only granted by `rbac.bicep`, which depends on `containerApp.outputs.principalId` and therefore
+  runs AFTER the containerapp module. Result: revision provisioning looped until
+  "Operation expired" (~20 min) and the whole deployment failed (ACA system log:
+  `FetchingKeyVaultSecretFailed`). Fix: the app is created WITHOUT a registry entry (public MCR
+  placeholder needs no auth); `containerapp-deploy.yml` runs
+  `az containerapp registry set --server <acr> --identity system` (note: `az containerapp update`
+  has NO `--registry-server/--registry-identity` flags in CLI 2.92) before updating the image.
+* **C2 — GITHUB_TOKEN cannot write repo variables on a fresh repo:** `gh variable set` from CI
+  failed with HTTP 403 on `actions/variables` even with `permissions: actions: write` in the
+  workflow and `default_workflow_permissions=write` set at repo level. Fix: CI no longer writes
+  repo variables at all — the deploy workflows resolve resource names from the ARM deployment
+  outputs (`az deployment sub show --query properties.outputs`), which they can do because they
+  already authenticate to Azure with the student token. Workflows only need `contents: read`.
+* **C3 — `func azure functionapp publish` on the runner:** "Can't determine project language
+  from files" → pass `--python` explicitly.
+* First `AnalyzeImage` execution after deploy can fail once (host/queue warm-up, "404 queue does
+  not exist"); the Event Grid retry policy redelivers and the retry succeeds — expected behavior,
+  documented for students.
