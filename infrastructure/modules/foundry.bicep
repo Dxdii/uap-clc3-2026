@@ -1,5 +1,5 @@
 // Microsoft Foundry resource (AIServices account with project management) +
-// project + vision model deployment (gpt-4o-mini, GlobalStandard).
+// project + vision model deployment (gpt-5-mini, GlobalStandard).
 //
 // The project endpoint format is:
 //   https://<account-name>.services.ai.azure.com/api/projects/<project-name>
@@ -52,12 +52,17 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   }
 }
 
-// Model deployments are PROJECT-scoped child resources in the new Foundry model
-// (accounts/projects/deployments — account-level deployments fail preflight when
-// the account is created in the same deployment).
-resource modelDeployment 'Microsoft.CognitiveServices/accounts/projects/deployments@2025-06-01' = {
-  parent: project
+// Model deployment: ACCOUNT-level child resource (accounts/deployments). The
+// project-scoped variant (accounts/projects/deployments) is only in preview
+// APIs — at stable 2025-06-01 the RP rejects it with
+// "UnsupportedAction: deployments/<name>" (verified by a real deployment).
+// The Foundry project routes SDK calls to the account-level deployments.
+resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
+  parent: account
   name: modelDeploymentName
+  // serialize child writes: parallel PUTs on account+project+deployment make the
+  // RP fail one of them with RequestConflict ("another operation on the parent")
+  dependsOn: [project]
   sku: {
     name: modelSkuName // e.g. 'GlobalStandard' (pay-per-token)
     capacity: modelCapacity

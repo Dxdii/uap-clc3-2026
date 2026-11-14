@@ -58,7 +58,7 @@ If your allowed set contains no Foundry-capable region at all, open a
 region-access support request (portal → Help + support) — see
 https://learn.microsoft.com/answers/questions/5916405.
 
-## 3. Do you have model quota (gpt-4o-mini TPM) in that region?
+## 3. Do you have model quota (gpt-5-mini TPM) in that region?
 
 Quota is per subscription + region + model. On student subscriptions the default
 is often **0 TPM**, and increase requests are frequently denied.
@@ -66,7 +66,7 @@ is often **0 TPM**, and increase requests are frequently denied.
 - **CLI:**
   ```bash
   az cognitiveservices usage list --location <region> -o json \
-    | jq '[.[] | select(.name.value | test("gpt-4o-mini"; "i")) | {name: .name.value, used: .currentValue, limit: .limit}]'
+    | jq '[.[] | select(.name.value | test("gpt-5-mini"; "i")) | {name: .name.value, used: .currentValue, limit: .limit}]'
   ```
   (Requires `Reader`/`Cognitive Services Usages Reader` on the subscription —
   you are Owner on your own student subscription.)
@@ -75,8 +75,8 @@ is often **0 TPM**, and increase requests are frequently denied.
   az rest --method get --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.CognitiveServices/quotaTiers?api-version=2025-10-01-preview"
   ```
 - **Foundry portal (per-region model quota):** https://ai.azure.com →
-  **Management center** → **Quota** → find gpt-4o-mini in your candidate region.
-  Alternative: **Models + endpoints** → **Deploy model** → gpt-4o-mini → the
+  **Management center** → **Quota** → find gpt-5-mini in your candidate region.
+  Alternative: **Models + endpoints** → **Deploy model** → gpt-5-mini → the
   region dropdown shows available quota per region.
 - If quota is **0**: click **Request quota increase** in the Quota page (approval
   on student subscriptions is not guaranteed), **or** choose a different allowed
@@ -93,7 +93,7 @@ informational only.)
 ## 5. Pick the location and continue
 
 Choose one region that is in your allowed list AND supports all services AND has
-gpt-4o-mini quota > 0. Use it as the single `location` for the whole deployment:
+gpt-5-mini quota > 0. Use it as the single `location` for the whole deployment:
 
 ```bash
 az deployment sub create --template-file infrastructure/main.bicep \
@@ -117,4 +117,4 @@ fails with `AKSCapacityHeavyUsage` — region capacity exhaustion):
      --parameters rgName=rg-clc3-<lastname>-r2 location=<next-candidate-region>
    ```
    Pick the next candidate region from the `preflight.sh` result table (the one
-   with the most remaining gpt-4o-mini GlobalStandard quota).
+   with the most remaining gpt-5-mini GlobalStandard quota).

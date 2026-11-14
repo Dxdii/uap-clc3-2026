@@ -82,3 +82,31 @@ end-to-end deployability on a student subscription; no security/style nitpicks).
   here; exercised in the devcontainer / function-deploy.yml.
 * Real end-to-end deployment to a student subscription (no accessible student subscription
   in this environment) — this is what students do; see README step 3 (pre-flight) and 4–7.
+
+## Live end-to-end test (2026-11-14, private PAYG subscription, region swedencentral)
+
+A full deploy + e2e run was performed against a real subscription (`rg-clc3-e2etest2`,
+deployment `clc3-e2e17` → **exit 0, all modules Succeeded**). Findings that changed code/docs:
+
+| # | Finding (verified live) | Fix |
+|---|---|---|
+| E1 | Invalid/old bicep API versions rejected by the RPs | storage family → `2025-06-01` (incl. `managementPolicies`), DocumentDB → `2025-04-15`, EventGrid systemTopics → `2025-02-15`, ACR → `2025-11-01` |
+| E2 | Cosmos container child path was misnamed `sqlDatabases/sqlContainers` | corrected to `sqlDatabases/containers@2025-04-15` |
+| E3 | Project-scoped model deployment `accounts/projects/deployments@2025-06-01` rejected at runtime (`UnsupportedAction`) | switched to **account-level** `accounts/deployments@2025-06-01` — the earlier what-if preflight result was misleading; the project routes SDK calls to account-level deployments |
+| E4 | Parallel child writes on the CS account (project + deployment) fail with `RequestConflict` | `dependsOn: [project]` on the model deployment serializes the writes |
+| E5 | `gpt-4o-mini` (2024-07-18) is **Deprecating** — new deployments rejected (`ServiceModelDeprecating`) | all defaults switched to **gpt-5-mini / 2025-08-07** (GA, GlobalStandard, quota OK in swedencentral) |
+| E6 | gpt-5 family rejects `max_tokens` (`Unsupported parameter … use max_completion_tokens`) and non-default `temperature` → function failed with HTTP 400 | `function_app.py` now uses `max_completion_tokens=800`, no `temperature` |
+| E7 | Wrong built-in role GUIDs in `rbac.bicep`: Storage Queue Data Contributor (`…7f855e888dfd` → `…5f855dd0fb88`) and Monitoring Metrics Publisher (`…055b5` → `…055eb`) caused `RoleDefinitionDoesNotExist` | GUIDs corrected (verified against `az role definition list`); note `53ca6127-…` ("Azure AI User" → now "Foundry User") is correct |
+| E8 | macOS: `docker build` without `--platform` pushes an arm64 image; ACA amd64 nodes then fail with `ImagePullBackOff` / "no matching manifest" | README step 6 now uses `docker build --platform linux/amd64` |
+| E9 | macOS: `func … publish --build local` packages macOS wheels into `.python_packages` → Linux host fails with `invalid ELF header`, loads 0 functions | README step 5 documents the fix: pre-build `.python_packages` with `pip install --platform manylinux2014_x86_64 --python-version 3.13 --abi cp313 --only-binary=:all:` (also match local Python minor version 3.13) |
+| E10 | `az functionapp show --query defaultHostName` returns empty in some CLI versions | use `--query properties.defaultHostName` |
+| E11 | Soft-deleted Cognitive Services account blocks recreate (`FlagMustBeSetForRestore`) | purge with `az cognitiveservices account purge --name <n> --location <loc> -g <rg>` (the `-g` flag is required) |
+| E12 | Placeholder image must be pullable; `mcr.microsoft.com/azuredocs/containerapps-helloworld:latest` works | default `uploadAppImage` = that MCR image; revision is unhealthy until the real image is pushed, which is fine |
+
+**E2E result (all green):** infra deployment Succeeded → `func publish` → Event Grid webhook
+subscription `sub-<func>-AnalyzeImage` (BlobCreated, subject prefix `…/imageanalysis/blobs/`)
+→ `curl -H "X-Upload-Token: …" -F file=@test2.jpeg https://<fqdn>/upload` → **200** (blob
+`test2.jpeg` in container `imageanalysis`) → Event Grid delivered → `AnalyzeImage` executed
+(**Succeeded**, 10.6 s) → Cosmos DB `ImageAnalysis/results` contains document `id=test2.jpeg`
+with the gpt-5-mini JSON analysis (caption/tags/objects/colors) written via the Cosmos output
+binding with managed identity.

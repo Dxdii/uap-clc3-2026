@@ -9,7 +9,7 @@ you ──POST image──▶ Container App (upload) ──▶ Blob Storage ('im
                                                           │ BlobCreated event (Event Grid)
                                                           ▼
                                         Flex Consumption Function 'AnalyzeImage'
-                                        (blob input binding → Foundry SDK → gpt-4o-mini)
+                                        (blob input binding → Foundry SDK → gpt-5-mini)
                                                           │
                                                           ▼ Cosmos DB output binding
                                         Cosmos DB 'ImageAnalysis' / 'results'
@@ -53,7 +53,7 @@ per region. Discover both before deploying anything:
 ```bash
 az login                                  # browser/device-code login
 az account set --subscription <id>        # select your Azure for Students subscription
-bash scripts/preflight.sh                 # prints candidate regions + gpt-4o-mini quota + RECOMMENDED LOCATION
+bash scripts/preflight.sh                 # prints candidate regions + gpt-5-mini quota + RECOMMENDED LOCATION
 ```
 
 If the script cannot run a check automatically, it prints the manual step — the authoritative manual
@@ -62,7 +62,7 @@ instructions are in [`scripts/README.md`](scripts/README.md):
 1. **Allowed regions:** portal → Subscriptions → your subscription → **Policies** → **Assignments** →
    *Allowed resource deployment regions* → read `listOfAllowedLocations`.
 2. **Service regions:** `az functionapp list-flexconsumption-locations`, `az provider show ...` (see script).
-3. **Model quota (gpt-4o-mini TPM):** Foundry portal https://ai.azure.com → **Management center** → **Quota**,
+3. **Model quota (gpt-5-mini TPM):** Foundry portal https://ai.azure.com → **Management center** → **Quota**,
    or CLI `az cognitiveservices usage list --location <region>`. If quota is **0 TPM**: request an increase
    (approval on student subscriptions is *not* guaranteed) or pick another allowed region
    (commonly `swedencentral`, `francecentral`, `eastus2`).
@@ -118,7 +118,7 @@ random one is generated per deployment and you can read it back with
 
 What gets created (all in one resource group, one region): Log Analytics + App Insights, a GPv2 storage
 account with the `imageanalysis` container and an Event Grid system topic, a **Foundry resource
-(AIServices) with project `clc3-project` and a `gpt-4o-mini` deployment**, a **serverless Cosmos DB**
+(AIServices) with project `clc3-project` and a `gpt-5-mini` deployment**, a **serverless Cosmos DB**
 (database `ImageAnalysis`, container `results`, partition key `/filename`), a **Flex Consumption
 function app** (`func-...`), a **Container Apps environment + ACR + upload app** (placeholder image
 listening on 8080), and all RBAC role assignments. The Event Grid **subscription** to the function is
@@ -135,6 +135,21 @@ func azure functionapp publish <functionAppName from step 4 outputs> --build loc
 Flex Consumption has **no remote build**, hence `--build local`. Then check the portal: resource group →
 function app → **Functions** → you should see `AnalyzeImage` (trigger: Blob, enabled).
 
+> **macOS gotcha (Apple Silicon):** `func ... publish --build local` runs `pip download` *without* a
+> `--platform` flag, so on macOS it packages **macOS wheels** into `.python_packages`. The Linux host
+> then fails with `invalid ELF header` and loads **0 functions**. Fix: pre-build the packages for
+> Linux and let `func` skip its own restore, or build inside a Linux container:
+> ```bash
+> # option A — pre-build Linux wheels (func will then say ".python_packages already in sync")
+> rm -rf .python_packages && mkdir -p .python_packages/lib/site-packages
+> pip install --platform manylinux2014_x86_64 --python-version 3.13 --abi cp313 \
+>   --only-binary=:all: --target .python_packages/lib/site-packages -r requirements.txt
+> func azure functionapp publish <app> --build local
+> # option B — run func inside a Linux container (needs your az login + func inside the image)
+> ```
+> Also match the local Python **minor version** to the app (3.13) — a 3.14 local build against a
+> 3.13 app only warns, but the ELF issue above is the real breaker.
+
 **Create the Event Grid subscription (after the code is published!)** — the blob trigger uses the
 Event Grid source, and its endpoint is the *blob extension webhook*, validated against the published
 function, so this must happen after `func ... publish` (the CI workflow does it automatically):
@@ -144,7 +159,7 @@ SUB=$(az account show --query id -o tsv)
 RG=rg-clc3-<your-lastname>
 APP=<functionAppName>
 ST=<storageAccountName>
-HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query defaultHostName -o tsv)
+HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)
 BLOBS_KEY=$(az rest --method POST \
   --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
   --query systemKeys.blobs_extension -o tsv)
@@ -172,11 +187,15 @@ ACR=<acrName>            # from step 4 outputs
 SERVER=<acrLoginServer>
 TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
 echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
-docker build -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
+docker build --platform linux/amd64 -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
 docker push "$SERVER/upload-app:latest"
 az containerapp update --name <containerAppName> --resource-group rg-clc3-<your-lastname> \
   --image "$SERVER/upload-app:latest"
 ```
+
+> **macOS gotcha (Apple Silicon):** always pass `--platform linux/amd64` to `docker build`.
+> Container Apps run on linux/amd64 nodes; pushing an arm64-only image succeeds, but the revision
+> then fails with `ImagePullBackOff` / "no matching manifest … not found" (verified live).
 
 (The CI workflow tags the image with the commit SHA **and** `latest`; `latest` is what infra redeploys
 reuse, so re-running the infra deployment does not reset the app to the placeholder image.)
@@ -228,7 +247,7 @@ Set these in your fork (Settings → Secrets and variables → Actions):
 | ACR (Basic) | **$0.17/day** — the only fixed cost | ~$2.50 for 2 weeks, ~$5/month |
 | Container App | free grant (180k vCPU-s, 360k GiB-s, 2M requests/month); scales to zero | ≈ $0 |
 | Flex Consumption function | free grant (250k executions + 100k GB-s/month) | ≈ $0 |
-| gpt-4o-mini | $0.15/1M input + $0.60/1M output tokens | ≈ **$0.001 per image** |
+| gpt-5-mini | ~$0.25/1M input + ~$2.00/1M output tokens | ≈ **$0.002 per image** |
 | Cosmos DB (serverless) | $0.25 per million RUs | ≈ $0 |
 | Storage / Event Grid / logs | pennies; first 100k events + 5 GB logs free | ≈ $0 |
 

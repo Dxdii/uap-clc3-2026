@@ -3,10 +3,10 @@
 // Role definition ids (built-in, well-known GUIDs):
 //   Storage Blob Data Owner ........ b7e6dc6d-f1e8-4753-8033-0f276bb0955b
 //   Storage Blob Data Contributor .. ba92f5b4-2d11-453d-a403-e96b0029c9fe
-//   Storage Queue Data Contributor . 974c5e8b-45b9-4653-ba55-7f855e888dfd
+//   Storage Queue Data Contributor . 974c5e8b-45b9-4653-ba55-5f855dd0fb88
 //   AcrPull ........................ 7f951dda-4ed3-4680-a7ca-43fe172d538d
 //   Azure AI User .................. 53ca6127-db72-4b80-b1b0-d745d6d5456d
-//   Monitoring Metrics Publisher ... 3913510d-42f4-4e42-8a64-420c390055b5
+//   Monitoring Metrics Publisher ... 3913510d-42f4-4e42-8a64-420c390055eb
 
 param storageAccountName string
 param acrName string
@@ -19,17 +19,17 @@ param containerAppPrincipalId string
 var roles = {
   storageBlobDataOwner: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
   storageBlobDataContributor: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-  storageQueueDataContributor: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-7f855e888dfd')
+  storageQueueDataContributor: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
   acrPull: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
   azureAiUser: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')
-  monitoringMetricsPublisher: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055b5')
+  monitoringMetricsPublisher: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
 }
 
-resource storage 'Microsoft.Storage/storageAccounts@2025-04-01' existing = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-06-01' existing = {
   name: storageAccountName
 }
 
-resource acr 'Microsoft.ContainerRegistry/registries@2025-06-01' existing = {
+resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
   name: acrName
 }
 

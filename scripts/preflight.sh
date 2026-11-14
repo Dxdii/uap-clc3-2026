@@ -7,7 +7,7 @@
 #      "Allowed resource deployment regions" / "Allowed locations")
 #   2. which regions actually offer the services we need (Flex Consumption,
 #      Container Apps, Cognitive Services/Foundry, Cosmos DB, Storage, ...)
-#   3. the gpt-4o-mini quota (TPM) per candidate region
+#   3. the gpt-5-mini quota (TPM) per candidate region
 #   4. compute quota per candidate region (informational)
 #
 # Output: a table of candidate regions and a final RECOMMENDED LOCATION line.
@@ -21,7 +21,7 @@
 # =============================================================================
 set -uo pipefail
 
-MODEL_FAMILY="gpt-4o-mini"          # model we deploy in the Foundry project
+MODEL_FAMILY="gpt-5-mini"          # model we deploy in the Foundry project
 POLICY_DEF_ID="/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c"
 # regions we probe for model quota first (EU first, then common student regions)
 QUOTA_PROBE_ORDER="swedencentral francecentral westeurope northeurope germanywestcentral uksouth eastus2 eastus australiaeast westus westus3"
