@@ -1,0 +1,74 @@
+# Builds and deploys the Flex Consumption Python function to the function app
+# created by infra-deploy. Flex Consumption has NO remote build, so the package
+# is built locally on the runner (--build local).
+#
+# Required repo variables:
+#   FUNCTION_APP_NAME      e.g. func-<suffix> (from infra outputs)
+#   RESOURCE_GROUP         e.g. rg-clc3-<lastname>
+#   STORAGE_ACCOUNT_NAME   e.g. st<suffix>  (from infra outputs)
+#   IMAGE_CONTAINER_NAME   e.g. imageanalysis (from infra outputs)
+
+name: function-deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/image-analysis-function/**"]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/image-analysis-function
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Azure Functions Core Tools
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm
+
+      - name: Install Python dependencies (local build)
+        run: pip install -r requirements.txt
+
+      - name: Publish function app (local build — Flex has no remote build)
+        run: func azure functionapp publish "${{ vars.FUNCTION_APP_NAME }}" --build local
+
+      # The Event-Grid-sourced BLOB trigger receives events at the blob
+      # extension webhook (NOT an azurefunction endpoint — that is only for
+      # EventGrid-trigger functions). The webhook is authenticated with the
+      # 'blobs_extension' host system key, and the endpoint is validated
+      # against the function, so the subscription can only be created AFTER
+      # the code is published. Idempotent: updates the endpoint if it exists.
+      - name: Create/update Event Grid subscription -> blob webhook
+        run: |
+          SUB_ID="$(az account show --query id -o tsv)"
+          RG="${{ vars.RESOURCE_GROUP }}"
+          APP="${{ vars.FUNCTION_APP_NAME }}"
+          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
+          SUB_NAME="sub-$APP-AnalyzeImage"
+          BLOBS_KEY="$(az rest --method POST \
+            --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
+            --query systemKeys.blobs_extension -o tsv)"
+          ENDPOINT="https://$APP.azurewebsites.net/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY"
+          if az eventgrid event-subscription show --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" >/dev/null 2>&1; then
+            az eventgrid event-subscription update --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
+              --endpoint-type webhook --endpoint "$ENDPOINT"
+          else
+            az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
+              --endpoint-type webhook --endpoint "$ENDPOINT" \
+              --included-event-types Microsoft.Storage.BlobCreated \
+              --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+          fi

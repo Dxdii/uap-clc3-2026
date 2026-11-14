@@ -1,0 +1,77 @@
+# Deploys the infrastructure (infrastructure/main.bicep) at subscription scope.
+#
+# Required repo secrets/variables (set once per fork):
+#   Secret  AZURE_CREDENTIALS   service principal JSON. The template creates Azure
+#                               RBAC role assignments (modules/rbac.bicep +
+#                               cosmosdb-rbac.bicep), which need
+#                               "Microsoft.Authorization/roleAssignments/write" —
+#                               so grant BOTH:
+#                                 Contributor                          (deploy resources)
+#                                 Role Based Access Control Administrator (create role assignments)
+#                               at subscription scope, e.g.:
+#                                 az ad sp create-for-rbac --name clc3-2026-deployer \
+#                                   --role Contributor --role "Role Based Access Control Administrator" \
+#                                   --scopes /subscriptions/<sub-id> --sdk-auth
+#                               (On a personal student subscription, Owner already covers both.)
+#   Variable RESOURCE_GROUP     e.g. rg-clc3-<lastname>
+#   Variable LOCATION           region from scripts/preflight.sh (e.g. swedencentral)
+#   Variable DEPLOYMENT_NAME    e.g. clc3-2026
+#   Variable ACR_NAME           (optional, from infra outputs) — when set and the
+#                               'latest' tag exists, infra redeploys keep the pushed
+#                               app image instead of resetting to the placeholder
+#
+# Preferably replace the secret with OIDC federation (azure/login@v2 supports
+# federated credentials) — see https://learn.microsoft.com/azure/developer/github/connect-from-azure
+
+name: infra-deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["infrastructure/**"]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Resolve app image (keep already-pushed image across infra redeploys)
+        id: image
+        run: |
+          IMG=""
+          if [ -n "${{ vars.ACR_NAME }}" ] \
+             && az acr repository show-tags --name "${{ vars.ACR_NAME }}" --repository upload-app -o tsv 2>/dev/null | grep -qx latest; then
+            IMG="${{ vars.ACR_NAME }}.azurecr.io/upload-app:latest"
+          fi
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Bicep at subscription scope
+        run: |
+          az account set --subscription "$(az account show --query id -o tsv)"
+          PARAMS=(rgName="${{ vars.RESOURCE_GROUP }}" location="${{ vars.LOCATION }}")
+          if [ -n "${{ steps.image.outputs.image }}" ]; then
+            PARAMS+=(uploadAppImage="${{ steps.image.outputs.image }}")
+          fi
+          az deployment sub create \
+            --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" \
+            --location "${{ vars.LOCATION }}" \
+            --template-file infrastructure/main.bicep \
+            --parameters "${PARAMS[@]}"
+          # If role assignments fail due to AAD propagation delay, simply re-run
+          # this workflow with the same parameters.
+
+      - name: Show deployment outputs
+        run: |
+          az deployment sub show \
+            --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" \
+            --query properties.outputs -o json
