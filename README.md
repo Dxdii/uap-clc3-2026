@@ -232,6 +232,49 @@ Then verify:
 3. **Cosmos DB:** portal → Cosmos DB account → Data Explorer → `ImageAnalysis` → `results` →
    a document with `id`/`filename` = your image name and the `analysis` JSON from the model.
 
+### Explore observability (Azure Monitor / Log Analytics)
+
+Every resource ships its logs and metrics to the single Log Analytics workspace (`log-<suffix>`)
+created by the deployment — ACA environment logs and App Insights (function telemetry) were
+already routed there by the bicep; `infrastructure/modules/diagnostics.bicep` adds diagnostic
+settings for storage, Event Grid, Cosmos DB, ACR, the Foundry account and the function app host.
+
+Open **portal → Log Analytics workspaces → `log-<suffix>` → Logs** and try:
+
+```kusto
+// upload-app container logs (the /upload HTTP handling)
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s contains "ca-upload" | order by TimeGenerated desc | take 50
+
+// function executions (worker telemetry via App Insights -> same workspace)
+AppTraces | where Message contains "AnalyzeImage" | order by TimeGenerated desc | take 20
+
+// blob uploads seen by the storage account (diagnostic settings)
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.STORAGE" and Category == "StorageWrite"
+| project TimeGenerated, Resource, OperationName, requestUri_s, statusCode_d
+| order by TimeGenerated desc | take 20
+
+// Cosmos data-plane operations (the function's output-binding writes)
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.DOCUMENTDB" and Category == "DataPlaneRequests"
+| project TimeGenerated, OperationName, requestResourceType_s, statusCode_s, requestCharge_s
+| order by TimeGenerated desc | take 20
+
+// Event Grid deliveries to the function webhook
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.EVENTGRID" | order by TimeGenerated desc | take 20
+```
+
+Platform **metrics** (CPU, requests, RU/s, …) need no setup: **portal → any resource → Monitor →
+Metrics** (Azure Monitor metrics are emitted automatically); the same metrics are also copied into
+the workspace via the `AllMetrics` diagnostic category, queryable as `AzureMetrics`.
+
+> Cost note: Log Analytics bills per ingested GB, but the first **5 GB/month are free** and the
+> workspace retention is capped at 30 days — this exercise emits MBs, so it stays at $0.
+> The Foundry `RequestResponse` log category (full AI payloads incl. the base64 image) is
+> deliberately **not** enabled; turn it on manually if you want to inspect inference payloads.
+
 ## 8. CI/CD (configured automatically by preflight)
 
 The workflows in `.github/workflows/` deploy infra, function and container app on push to `main`:
