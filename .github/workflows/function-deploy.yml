@@ -8,9 +8,10 @@
 #
 # Required repo secrets/variables:
 #   Secret   AZURE_CLI_TOKENS     (from preflight.sh)
-#   Variable AZURE_SUBSCRIPTION_ID, FUNCTION_APP_NAME, RESOURCE_GROUP,
-#            STORAGE_ACCOUNT_NAME, IMAGE_CONTAINER_NAME
-#            (the last four are set by the infra-deploy workflow from its outputs)
+#   Variable AZURE_SUBSCRIPTION_ID, RESOURCE_GROUP, DEPLOYMENT_NAME
+#   FUNCTION_APP_NAME / STORAGE_ACCOUNT_NAME / IMAGE_CONTAINER_NAME are resolved
+#   from the infra-deploy deployment outputs via 'az deployment sub show'
+#   (run infra-deploy first).
 
 name: function-deploy
 
@@ -41,12 +42,30 @@ jobs:
           az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
           az account show --query "{name:name, id:id, user:user.name}" -o json
 
-      - name: Verify infra variables are set (run infra-deploy first)
+      - name: Resolve infra outputs (run infra-deploy first)
+        id: infra
         run: |
-          if [ -z "${{ vars.RESOURCE_GROUP }}" ] || [ -z "${{ vars.FUNCTION_APP_NAME }}" ] || [ -z "${{ vars.STORAGE_ACCOUNT_NAME }}" ] || [ -z "${{ vars.IMAGE_CONTAINER_NAME }}" ]; then
-            echo "::error::infra variables are not set — run the infra-deploy workflow first (it publishes the deployment outputs as repo variables), then re-run this workflow."
+          if [ -z "${{ vars.RESOURCE_GROUP }}" ]; then
+            echo "::error::RESOURCE_GROUP variable is not set — run scripts/preflight.sh first."
             exit 1
           fi
+          DEP_NAME="${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}"
+          OUT="$(az deployment sub show --name "$DEP_NAME" --query properties.outputs -o json 2>/dev/null)" || OUT=""
+          if [ -z "$OUT" ] || [ "$OUT" = "null" ]; then
+            echo "::error::deployment '$DEP_NAME' not found — run the infra-deploy workflow first, then re-run this workflow."
+            exit 1
+          fi
+          APP="$(jq -r .functionAppName.value <<<"$OUT")"
+          ST="$(jq -r .storageAccountName.value <<<"$OUT")"
+          IMG="$(jq -r .imageContainerName.value <<<"$OUT")"
+          if [ -z "$APP" ] || [ "$APP" = "null" ] || [ -z "$ST" ] || [ "$ST" = "null" ] || [ -z "$IMG" ] || [ "$IMG" = "null" ]; then
+            echo "::error::deployment outputs missing functionAppName/storageAccountName/imageContainerName — re-run the infra-deploy workflow."
+            exit 1
+          fi
+          echo "FUNCTION_APP_NAME=$APP" >> "$GITHUB_OUTPUT"
+          echo "STORAGE_ACCOUNT_NAME=$ST" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_CONTAINER_NAME=$IMG" >> "$GITHUB_OUTPUT"
+          echo "resolved FUNCTION_APP_NAME=$APP STORAGE_ACCOUNT_NAME=$ST IMAGE_CONTAINER_NAME=$IMG"
 
       - uses: actions/setup-python@v5
         with:
@@ -59,7 +78,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Publish function app (local build — Flex has no remote build)
-        run: func azure functionapp publish "${{ vars.FUNCTION_APP_NAME }}" --build local
+        run: func azure functionapp publish "${{ steps.infra.outputs.FUNCTION_APP_NAME }}" --build local
 
       # The Event-Grid-sourced BLOB trigger receives events at the blob
       # extension webhook (NOT an azurefunction endpoint — that is only for
@@ -71,8 +90,8 @@ jobs:
         run: |
           SUB_ID="$(az account show --query id -o tsv)"
           RG="${{ vars.RESOURCE_GROUP }}"
-          APP="${{ vars.FUNCTION_APP_NAME }}"
-          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
+          APP="${{ steps.infra.outputs.FUNCTION_APP_NAME }}"
+          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ steps.infra.outputs.STORAGE_ACCOUNT_NAME }}"
           SUB_NAME="sub-$APP-AnalyzeImage"
           HOST="$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)"
           # the blobs_extension system key can take a moment to appear after publish -> retry
@@ -101,11 +120,11 @@ jobs:
               az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
                 --endpoint-type webhook --endpoint "$ENDPOINT" \
                 --included-event-types Microsoft.Storage.BlobCreated \
-                --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+                --subject-begins-with "/blobServices/default/containers/${{ steps.infra.outputs.IMAGE_CONTAINER_NAME }}/blobs/"
             fi
           else
             az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
               --endpoint-type webhook --endpoint "$ENDPOINT" \
               --included-event-types Microsoft.Storage.BlobCreated \
-              --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+              --subject-begins-with "/blobServices/default/containers/${{ steps.infra.outputs.IMAGE_CONTAINER_NAME }}/blobs/"
           fi

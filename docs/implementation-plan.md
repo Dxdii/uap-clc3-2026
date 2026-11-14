@@ -238,14 +238,18 @@ uap-clc3-2026/
   and secret `UPLOAD_TOKEN` in the student's fork via `gh`. Each workflow decodes the secret into
   `$HOME/.azure` on the runner (mechanism validated locally with a fresh `AZURE_CONFIG_DIR`) and runs
   `az account set`. Fork must stay private (secret = Owner creds on the student's own subscription).
-- `infra-deploy.yml`: token login, `az deployment sub create` on push to main; afterwards publishes the
-  deployment outputs (`FUNCTION_APP_NAME`, `STORAGE_ACCOUNT_NAME`, `IMAGE_CONTAINER_NAME`, `ACR_NAME`,
-  `CONTAINER_APP_NAME`) as repo variables via `gh variable set` (needs `permissions: actions: write`).
-- `function-deploy.yml`: setup Python 3.13 + Core Tools, `pip install -r requirements.txt`,
+- `infra-deploy.yml`: token login, `az deployment sub create` on push to main. The deployment outputs
+  (`functionAppName`, `storageAccountName`, `imageContainerName`, `acrName`, `containerAppName`) are
+  read back by the other workflows directly via `az deployment sub show` — CI never calls the GitHub
+  variables API (GITHUB_TOKEN could not be granted `actions: write` reliably on a fresh repo —
+  HTTP 403 on `actions/variables`, observed live; reading outputs from Azure avoids that entirely).
+- `function-deploy.yml`: resolves `FUNCTION_APP_NAME`/`STORAGE_ACCOUNT_NAME`/`IMAGE_CONTAINER_NAME`
+  from the deployment outputs, setup Python 3.13 + Core Tools, `pip install -r requirements.txt`,
   `func azure functionapp publish --build local` (runner-side build — no macOS-wheel issue), then
   create/update the Event Grid blob webhook subscription.
-- `containerapp-deploy.yml`: runner-side `docker build` + `docker push` to ACR with
-  `az acr login --expose-token` (works on Basic SKU with the user token) + `az containerapp update --image`.
+- `containerapp-deploy.yml`: resolves `ACR_NAME`/`CONTAINER_APP_NAME` from the deployment outputs,
+  runner-side `docker build` + `docker push` to ACR with `az acr login --expose-token` (works on Basic
+  SKU with the user token) + `az containerapp update --image ... --registry-server ... --registry-identity system`.
   `az acr build` (ACR Tasks) is deliberately NOT used: blocked on Azure for Students
   (`TasksOperationsNotAllowed`) and needs Standard/Premium SKU.
 

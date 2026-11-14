@@ -236,9 +236,10 @@ Then verify:
 
 The workflows in `.github/workflows/` deploy infra, function and container app on push to `main`:
 
-* `infra-deploy.yml` — Bicep at subscription scope; afterwards publishes the deployment outputs
-  (`FUNCTION_APP_NAME`, `STORAGE_ACCOUNT_NAME`, `IMAGE_CONTAINER_NAME`, `ACR_NAME`, `CONTAINER_APP_NAME`)
-  as repo variables, so the other workflows know the resource names.
+* `infra-deploy.yml` — Bicep at subscription scope. The other workflows read the resource names
+  (`functionAppName`, `storageAccountName`, `imageContainerName`, `acrName`, `containerAppName`)
+  directly from the deployment outputs via `az deployment sub show`, so no extra repo variables
+  are needed.
 * `containerapp-deploy.yml` — builds the upload-app image **on the runner** and pushes it to your ACR
   (`az acr build` is not used: ACR Tasks are blocked on student subscriptions), then updates the Container App.
 * `function-deploy.yml` — `func azure functionapp publish --build local` (Flex has no remote build) and

@@ -9,11 +9,14 @@
 #   Secret   AZURE_CLI_TOKENS     base64 tar of the student's ~/.azure token store
 #   Secret   UPLOAD_TOKEN         optional — keeps the upload token stable across redeploys
 #   Variable AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, RESOURCE_GROUP, LOCATION, DEPLOYMENT_NAME
-#   Variables ACR_NAME, FUNCTION_APP_NAME, STORAGE_ACCOUNT_NAME, IMAGE_CONTAINER_NAME,
-#             CONTAINER_APP_NAME — set automatically by this workflow from the outputs
 #
-# ACR_NAME is also used to keep an already-pushed app image across infra
-# redeploys (when the 'latest' tag exists, the placeholder is not re-applied).
+# The resource names in the deployment outputs (function app, storage, ACR,
+# container app, image container) are NOT written to repo variables by CI —
+# the containerapp/function deploy workflows read them straight from
+# 'az deployment sub show' (they already authenticate with the student token).
+# This workflow only needs to resolve ACR_NAME itself to keep an already-pushed
+# app image across infra redeploys (when the 'latest' tag exists, the
+# placeholder is not re-applied).
 
 name: infra-deploy
 
@@ -25,7 +28,6 @@ on:
 
 permissions:
   contents: read
-  actions: write   # to publish the deployment outputs as repo variables (gh variable set)
 
 jobs:
   deploy:
@@ -46,9 +48,12 @@ jobs:
         id: image
         run: |
           IMG=""
-          if [ -n "${{ vars.ACR_NAME }}" ] \
-             && az acr repository show-tags --name "${{ vars.ACR_NAME }}" --repository upload-app -o tsv 2>/dev/null | grep -qx latest; then
-            IMG="${{ vars.ACR_NAME }}.azurecr.io/upload-app:latest"
+          DEP_NAME="${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}"
+          # ACR name comes from the PREVIOUS deployment's outputs (if any)
+          ACR="$(az deployment sub show --name "$DEP_NAME" --query properties.outputs.acrName.value -o tsv 2>/dev/null || true)"
+          if [ -n "$ACR" ] && [ "$ACR" != "None" ] \
+             && az acr repository show-tags --name "$ACR" --repository upload-app -o tsv 2>/dev/null | grep -qx latest; then
+            IMG="$ACR.azurecr.io/upload-app:latest"
           fi
           echo "image=$IMG" >> "$GITHUB_OUTPUT"
 
@@ -78,22 +83,7 @@ jobs:
             --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" \
             --query properties.outputs -o json
 
-      # Publish the infra outputs as repo variables so the function/containerapp
-      # workflows know the resource names (they are deterministic but not
-      # computable outside ARM: take(uniqueString(subscriptionId, rgName), 16)).
-      - name: Set repo variables from deployment outputs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          OUT="$(az deployment sub show --name "${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}" --query properties.outputs -o json)"
-          for pair in FUNCTION_APP_NAME:functionAppName STORAGE_ACCOUNT_NAME:storageAccountName \
-                      IMAGE_CONTAINER_NAME:imageContainerName ACR_NAME:acrName CONTAINER_APP_NAME:containerAppName; do
-            var="${pair%%:*}"; out="${pair#*:}"
-            val="$(jq -r --arg o "$out" '.[$o].value' <<<"$OUT")"
-            if [ -n "$val" ] && [ "$val" != "null" ]; then
-              gh variable set "$var" --body "$val"
-              echo "set $var=$val"
-            else
-              echo "WARNING: output $out missing — variable $var not set" >&2
-            fi
-          done
+      # Resource names are read from these outputs by the containerapp/function
+      # deploy workflows via 'az deployment sub show' (see their "Resolve infra
+      # outputs" step) — no repo variables needed, so this workflow only needs
+      # 'contents: read'.

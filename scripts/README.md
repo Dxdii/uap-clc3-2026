@@ -148,14 +148,9 @@ gh variable set AZURE_TENANT_ID       --repo "$REPO" --body "$TENANT"
 gh variable set RESOURCE_GROUP        --repo "$REPO" --body "$RG_NAME"
 gh variable set LOCATION              --repo "$REPO" --body "$LOC"
 gh variable set DEPLOYMENT_NAME       --repo "$REPO" --body "clc3-2026"
-
-# 4. default workflow permissions = read/write (the infra-deploy workflow creates
-#    repo variables via `gh variable set` with GITHUB_TOKEN; a read-only default
-#    makes that fail with HTTP 403)
-gh api -X PUT "repos/$REPO/actions/permissions/workflow" -f default_workflow_permissions=write
-# FUNCTION_APP_NAME / STORAGE_ACCOUNT_NAME / IMAGE_CONTAINER_NAME / ACR_NAME /
-# CONTAINER_APP_NAME are set automatically by the infra-deploy workflow from the
-# deployment outputs — no manual step needed.
+# The deploy workflows resolve the resource names (function app, storage, ACR,
+# container app, image container) from the Azure deployment outputs themselves
+# (`az deployment sub show`) — no extra variables to set.
 ```
 
 The workflows decode `AZURE_CLI_TOKENS` into `$HOME/.azure` on the runner (see the "Login to Azure"

@@ -13,8 +13,9 @@
 #
 # Required repo secrets/variables:
 #   Secret   AZURE_CLI_TOKENS     (from preflight.sh)
-#   Variable AZURE_SUBSCRIPTION_ID, RESOURCE_GROUP, ACR_NAME, CONTAINER_APP_NAME
-#            (ACR_NAME / CONTAINER_APP_NAME are set by the infra-deploy workflow)
+#   Variable AZURE_SUBSCRIPTION_ID, RESOURCE_GROUP, DEPLOYMENT_NAME
+#   ACR_NAME / CONTAINER_APP_NAME are resolved from the infra-deploy deployment
+#   outputs via 'az deployment sub show' (run infra-deploy first).
 
 name: containerapp-deploy
 
@@ -42,24 +43,40 @@ jobs:
           az account set --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
           az account show --query "{name:name, id:id, user:user.name}" -o json
 
-      - name: Verify infra variables are set (run infra-deploy first)
+      - name: Resolve infra outputs (run infra-deploy first)
+        id: infra
         run: |
-          if [ -z "${{ vars.RESOURCE_GROUP }}" ] || [ -z "${{ vars.ACR_NAME }}" ] || [ -z "${{ vars.CONTAINER_APP_NAME }}" ]; then
-            echo "::error::RESOURCE_GROUP/ACR_NAME/CONTAINER_APP_NAME are not set — run the infra-deploy workflow first (it publishes the deployment outputs as repo variables), then re-run this workflow."
+          if [ -z "${{ vars.RESOURCE_GROUP }}" ]; then
+            echo "::error::RESOURCE_GROUP variable is not set — run scripts/preflight.sh first."
             exit 1
           fi
+          DEP_NAME="${{ vars.DEPLOYMENT_NAME || 'clc3-2026' }}"
+          OUT="$(az deployment sub show --name "$DEP_NAME" --query properties.outputs -o json 2>/dev/null)" || OUT=""
+          if [ -z "$OUT" ] || [ "$OUT" = "null" ]; then
+            echo "::error::deployment '$DEP_NAME' not found — run the infra-deploy workflow first, then re-run this workflow."
+            exit 1
+          fi
+          ACR="$(jq -r .acrName.value <<<"$OUT")"
+          APP="$(jq -r .containerAppName.value <<<"$OUT")"
+          if [ -z "$ACR" ] || [ "$ACR" = "null" ] || [ -z "$APP" ] || [ "$APP" = "null" ]; then
+            echo "::error::deployment outputs missing acrName/containerAppName — re-run the infra-deploy workflow."
+            exit 1
+          fi
+          echo "ACR_NAME=$ACR" >> "$GITHUB_OUTPUT"
+          echo "CONTAINER_APP_NAME=$APP" >> "$GITHUB_OUTPUT"
+          echo "resolved ACR_NAME=$ACR CONTAINER_APP_NAME=$APP"
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to ACR with an Azure AD token (no admin user needed)
         run: |
-          TOKEN="$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --query accessToken -o tsv)"
-          echo "$TOKEN" | docker login "${{ vars.ACR_NAME }}.azurecr.io" \
+          TOKEN="$(az acr login --name "${{ steps.infra.outputs.ACR_NAME }}" --expose-token --query accessToken -o tsv)"
+          echo "$TOKEN" | docker login "${{ steps.infra.outputs.ACR_NAME }}.azurecr.io" \
             -u 00000000-0000-0000-0000-000000000000 --password-stdin
 
       - name: Build and push image, update container app
         run: |
-          SERVER="${{ vars.ACR_NAME }}.azurecr.io"
+          SERVER="${{ steps.infra.outputs.ACR_NAME }}.azurecr.io"
           docker build -t "$SERVER/upload-app:${{ github.sha }}" -t "$SERVER/upload-app:latest" \
             -f src/upload-app/Dockerfile src/upload-app
           docker push "$SERVER/upload-app:${{ github.sha }}"
@@ -70,7 +87,7 @@ jobs:
           # so its first revision can provision with the public placeholder image
           # before any role assignment exists).
           az containerapp update \
-            --name "${{ vars.CONTAINER_APP_NAME }}" \
+            --name "${{ steps.infra.outputs.CONTAINER_APP_NAME }}" \
             --resource-group "${{ vars.RESOURCE_GROUP }}" \
             --image "$SERVER/upload-app:${{ github.sha }}" \
             --registry-server "$SERVER" \
