@@ -3,10 +3,13 @@
 //   blob trigger (Event Grid source) -> Foundry SDK -> Cosmos DB output binding
 //
 // NOTE: the Event Grid event subscription that feeds the blob trigger is NOT
-// created here — an AzureFunction endpoint is validated against the function,
-// which only exists after the code is published. It is created right after
+// created here — the webhook endpoint is validated against the function, which
+// only exists after the code is published. It is created right after
 // 'func azure functionapp publish' in .github/workflows/function-deploy.yml
-// (manual equivalent: see README.md) using the 'functionResourceId' output.
+// (manual equivalent: see README.md). For an Event-Grid-sourced BLOB trigger
+// the endpoint is the blob extension webhook (NOT an AzureFunction endpoint,
+// which is only for EventGrid-trigger functions):
+//   https://<app>.azurewebsites.net/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=<blobs_extension system key>
 
 param location string
 param nameSuffix string
@@ -15,7 +18,6 @@ param tags object
 param storageAccountName string
 param blobEndpoint string // e.g. https://st....blob.core.windows.net/
 param deploymentContainerName string
-param systemTopicName string
 @secure()
 param appInsightsConnectionString string // embeds the App Insights instrumentation key
 param foundryProjectEndpoint string
@@ -124,21 +126,7 @@ resource site 'Microsoft.Web/sites@2025-03-01' = {
   }
 }
 
-// NOTE: the Event Grid event subscription (BlobCreated in 'imageanalysis' ->
-// this function) is created AFTER code publish, because an AzureFunction
-// endpoint is validated against the function resource itself. The endpoint
-// must be the FULL function resource id: /sites/<app>/functions/<function>.
-// Creation command (used by function-deploy.yml and documented in README.md):
-//   az eventgrid event-subscription create \
-//     --source-resource-id <storageAccountId> --name sub-<app>-AnalyzeImage \
-//     --endpoint-type azurefunction \
-//     --endpoint "${functionResourceId}" \
-//     --included-event-types Microsoft.Storage.BlobCreated \
-//     --subject-begins-with "/blobServices/default/containers/${imageContainerName}/blobs/"
-
 output name string = site.name
 output id string = site.id
 output principalId string = site.identity.principalId
 output functionName string = functionName
-output functionResourceId string = '${site.id}/functions/${functionName}'
-output systemTopicName string = systemTopicName

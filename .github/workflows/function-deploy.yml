@@ -46,23 +46,29 @@ jobs:
       - name: Publish function app (local build — Flex has no remote build)
         run: func azure functionapp publish "${{ vars.FUNCTION_APP_NAME }}" --build local
 
-      # The blob trigger uses an Event Grid source, which needs an event
-      # subscription with an AzureFunction endpoint. The endpoint is validated
-      # against the function itself, so the subscription can only be created
-      # AFTER the code is published. Idempotent: skips if it already exists.
-      - name: Create Event Grid subscription -> AnalyzeImage blob trigger
+      # The Event-Grid-sourced BLOB trigger receives events at the blob
+      # extension webhook (NOT an azurefunction endpoint — that is only for
+      # EventGrid-trigger functions). The webhook is authenticated with the
+      # 'blobs_extension' host system key, and the endpoint is validated
+      # against the function, so the subscription can only be created AFTER
+      # the code is published. Idempotent: updates the endpoint if it exists.
+      - name: Create/update Event Grid subscription -> blob webhook
         run: |
           SUB_ID="$(az account show --query id -o tsv)"
-          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
-          FUNC_ID="/subscriptions/$SUB_ID/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.Web/sites/${{ vars.FUNCTION_APP_NAME }}/functions/AnalyzeImage"
-          if az eventgrid event-subscription show --source-resource-id "$STORAGE_ID" --name sub-${{ vars.FUNCTION_APP_NAME }}-AnalyzeImage >/dev/null 2>&1; then
-            echo "event subscription already exists — skipping"
+          RG="${{ vars.RESOURCE_GROUP }}"
+          APP="${{ vars.FUNCTION_APP_NAME }}"
+          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
+          SUB_NAME="sub-$APP-AnalyzeImage"
+          BLOBS_KEY="$(az rest --method POST \
+            --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
+            --query systemKeys.blobs_extension -o tsv)"
+          ENDPOINT="https://$APP.azurewebsites.net/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY"
+          if az eventgrid event-subscription show --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" >/dev/null 2>&1; then
+            az eventgrid event-subscription update --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
+              --endpoint-type webhook --endpoint "$ENDPOINT"
           else
-            az eventgrid event-subscription create \
-              --source-resource-id "$STORAGE_ID" \
-              --name sub-${{ vars.FUNCTION_APP_NAME }}-AnalyzeImage \
-              --endpoint-type azurefunction \
-              --endpoint "$FUNC_ID" \
+            az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
+              --endpoint-type webhook --endpoint "$ENDPOINT" \
               --included-event-types Microsoft.Storage.BlobCreated \
               --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
           fi

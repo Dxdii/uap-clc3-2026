@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+
+# Azure Functions local
+src/image-analysis-function/local.settings.json
+src/image-analysis-function/.func/
+src/image-analysis-function/.venv/
+*.zip
+
+# OS/editor
+.DS_Store
+*.swp
+
+# Bicep
+infrastructure/*.json
+!infrastructure/**/*.json

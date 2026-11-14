@@ -13,6 +13,12 @@ App settings (set by infrastructure/modules/function.bicep):
   FOUNDRY_PROJECT_ENDPOINT      https://<ais>.services.ai.azure.com/api/projects/<project>
   FOUNDRY_MODEL_DEPLOYMENT      e.g. gpt-4o-mini
   COSMOS_CONNECTION__*          identity-based Cosmos DB connection
+
+Local development (local.settings.json, see local.settings.example.json):
+  omit the "__credential": "managedidentity" selectors — locally there is no
+  managed-identity endpoint, so bindings fall back to DefaultAzureCredential
+  (your 'az login'). The DEPLOYED app sets __credential=managedidentity.
+  AzureWebJobsStorage can be UseDevelopmentStorage=true (Azurite) locally.
 """
 
 import base64
@@ -41,6 +47,20 @@ Analyze the image and respond with STRICT JSON only (no markdown, no prose) of t
   "objects": ["object", ...],
   "colors": ["dominant color", ...]
 }"""
+
+
+def cosmos_safe_id(blob_name: str) -> str:
+    """Cosmos DB item ids must not contain / \\ ? # (nor trailing spaces).
+
+    Nested blob names like 'photos/photo.jpg' would otherwise fail at the
+    output binding AFTER the (billable) model call already ran."""
+    return (
+        blob_name.replace("/", "-")
+        .replace("\\", "-")
+        .replace("?", "-")
+        .replace("#", "-")
+        .rstrip()
+    )
 
 
 def get_openai_client():
@@ -104,8 +124,8 @@ def analyze_image(image: blob_ext.BlobClient, doc: func.Out[func.Document]) -> N
     )
 
     document = {
-        "id": blob_name,
-        "filename": blob_name,  # partition key (/filename)
+        "id": cosmos_safe_id(blob_name),  # '/' etc. are illegal in Cosmos ids
+        "filename": blob_name,  # partition key (/filename) keeps the full name
         "mediatype": content_type,
         "size": size,
         "container": getattr(image, "container_name", IMAGE_CONTAINER),

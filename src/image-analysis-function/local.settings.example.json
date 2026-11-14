@@ -8,7 +8,6 @@
     "COSMOS_DATABASE_NAME": "ImageAnalysis",
     "COSMOS_CONTAINER_NAME": "results",
     "IMAGE_CONTAINER_NAME": "imageanalysis",
-    "COSMOS_CONNECTION__accountEndpoint": "https://<cosmos-account>.documents.azure.com:443/",
-    "COSMOS_CONNECTION__credential": "managedidentity"
+    "COSMOS_CONNECTION__accountEndpoint": "https://<cosmos-account>.documents.azure.com:443/"
   }
 }

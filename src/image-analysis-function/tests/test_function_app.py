@@ -123,3 +123,22 @@ def test_analyze_image_bytes_parses_json(monkeypatch):
     fake_client = FakeChatClient(FAKE_ANALYSIS)
     result = function_app.analyze_image_bytes(fake_client, "gpt-4o-mini", "image/png", b"123")
     assert result == FAKE_ANALYSIS
+
+
+def test_nested_blob_name_gets_safe_cosmos_id(monkeypatch):
+    """Blob names with '/' are illegal as Cosmos item ids; filename must stay intact."""
+    fake_client = FakeChatClient(FAKE_ANALYSIS)
+    monkeypatch.setattr(function_app, "get_openai_client", lambda: fake_client)
+    monkeypatch.setenv("FOUNDRY_MODEL_DEPLOYMENT", "gpt-4o-mini")
+
+    doc_out = FakeDocOut()
+    function_app.analyze_image(FakeBlobClient(name="photos/2026/lecture photo.jpg"), doc_out)
+
+    document = json.loads(doc_out.value.to_json() if hasattr(doc_out.value, "to_json") else json.dumps(dict(doc_out.value)))
+    assert document["id"] == "photos-2026-lecture photo.jpg"
+    assert "/" not in document["id"] and "#" not in document["id"]
+    assert document["filename"] == "photos/2026/lecture photo.jpg"  # partition key unchanged
+
+
+def test_cosmos_safe_id_replaces_reserved_chars():
+    assert function_app.cosmos_safe_id("a/b\\c?d#e ") == "a-b-c-d-e"

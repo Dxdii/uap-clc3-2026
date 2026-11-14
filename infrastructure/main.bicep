@@ -57,7 +57,7 @@ var tags = {
 var nameSuffix = '${take(replace(toLower(rgName), '-', ''), 10)}${take(uniqueString(rgName), 6)}'
 
 module rg 'modules/resourcegroup.bicep' = {
-  name: deploymentName
+  name: '${deploymentName}-rg' // distinct from the parent deployment name (ARM forbids self-reference)
   scope: subscription()
   params: {
     name: rgName
@@ -127,7 +127,6 @@ module functionApp 'modules/function.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     blobEndpoint: storage.outputs.blobEndpoint
     deploymentContainerName: storage.outputs.deploymentContainerName
-    systemTopicName: storage.outputs.systemTopicName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     foundryProjectEndpoint: foundry.outputs.projectEndpoint
     modelDeploymentName: modelDeploymentName

@@ -67,20 +67,35 @@ if az policy assignment list --scope "/subscriptions/$SUB" -o json > "$TMPD/assi
     .[] | select(.properties.policyDefinitionId == $def
                  or (.properties.displayName | test("allowed (resource deployment )?regions|allowed locations"; "i")))
        | .name' "$TMPD/assignments.json" > "$TMPD/assignment_names.txt" 2>/dev/null || true
-  FOUND_NAMES=0
+  # Azure enforces ALL matching allowed-location assignments together, so the
+  # effective allowed set is the INTERSECTION across assignments (not a union).
+  n=0; READ_FAIL=0
   while read -r aname; do
     [ -z "$aname" ] && continue
-    FOUND_NAMES=1
-    az policy assignment show --name "$aname" --scope "/subscriptions/$SUB" -o json 2>/dev/null \
-      | jq -r '.properties.parameters
-                 | (.listOfAllowedLocations.value // .allowedLocations.value // .listOfAllowedLocation.value // empty)
-                 | .[]?' \
-      >> "$ALLOWED" || true
+    n=$((n+1))
+    if az policy assignment show --name "$aname" --scope "/subscriptions/$SUB" -o json 2>/dev/null \
+       | jq -r '.properties.parameters
+                  | (.listOfAllowedLocations.value // .allowedLocations.value // .listOfAllowedLocation.value // empty)
+                  | .[]?' > "$TMPD/policy_$n.txt" && [ -s "$TMPD/policy_$n.txt" ]; then
+      :
+    else
+      READ_FAIL=1
+    fi
   done < "$TMPD/assignment_names.txt"
-  if [ -s "$ALLOWED" ]; then
+  if [ "$n" -gt 0 ] && [ "$READ_FAIL" = "0" ]; then
+    first=1
+    for i in $(seq 1 "$n"); do
+      if [ "$first" = "1" ]; then
+        cp "$TMPD/policy_$i.txt" "$ALLOWED"; first=0
+      else
+        comm -12 <(sort -u "$ALLOWED") <(sort -u "$TMPD/policy_$i.txt") > "$TMPD/allowed_new.txt"
+        mv "$TMPD/allowed_new.txt" "$ALLOWED"
+      fi
+    done
+    sort -u "$ALLOWED" -o "$ALLOWED"
     POLICY_STATE="restricted"
-  elif [ "$FOUND_NAMES" = "1" ]; then
-    POLICY_STATE="unknown" # assignment exists but its parameters could not be read
+  elif [ "$n" -gt 0 ]; then
+    POLICY_STATE="unknown" # assignment(s) exist but at least one could not be read
   else
     POLICY_STATE="none"    # verified: no allowed-regions assignment at subscription scope
   fi
@@ -143,17 +158,19 @@ JQ_ARGS=(--rawfile a "$ALLOWED")
 for f in "${SERVICE_FILES[@]}"; do JQ_ARGS+=(--rawfile "${f#r_}" "$TMPD/$f.txt"); done
 jq -n "${JQ_ARGS[@]}" '
   def arr($s): $s | split("\n") | map(select(length > 0));
-  arr($a) as $A
+  arr($a) as $A | arr($aca) as $ACA | arr($flex) as $FLEX | arr($ai) as $AI
+  | arr($cosmos) as $COSMOS | arr($storage) as $STORAGE | arr($eventgrid) as $EG
+  | arr($acr) as $ACR | arr($monitor) as $MON | arr($web) as $WEB
   | [$A[] | select(
-      (. as $x | $aca      | index($x)) and
-      (. as $x | $flex     | index($x)) and
-      (. as $x | $ai       | index($x)) and
-      (. as $x | $cosmos   | index($x)) and
-      (. as $x | $storage  | index($x)) and
-      (. as $x | $eventgrid| index($x)) and
-      (. as $x | $acr      | index($x)) and
-      (. as $x | $monitor  | index($x)) and
-      (. as $x | $web      | index($x)))]' \
+      (. as $x | $ACA     | index($x)) and
+      (. as $x | $FLEX    | index($x)) and
+      (. as $x | $AI      | index($x)) and
+      (. as $x | $COSMOS  | index($x)) and
+      (. as $x | $STORAGE | index($x)) and
+      (. as $x | $EG      | index($x)) and
+      (. as $x | $ACR     | index($x)) and
+      (. as $x | $MON     | index($x)) and
+      (. as $x | $WEB     | index($x)))]' \
   > "$TMPD/candidates.json"
 CANDIDATES="$(jq -r '.[]' "$TMPD/candidates.json" 2>/dev/null | paste -sd' ' -)"
 if [ -z "${CANDIDATES// }" ]; then
@@ -209,11 +226,14 @@ printf '%-22s %-10s %-8s %-11s %s\n' "REGION" "LIMIT(KTPM)" "USED" "REMAINING" "
 while IFS=$'\t' read -r r l u rem st; do printf '%-22s %-10s %-8s %-11s %s\n' "$r" "$l" "$u" "$rem" "$st"; done < "$TMPD/quota.tsv"
 
 # recommend the OK region with the most REMAINING GlobalStandard quota
-RECOMMENDED="$(awk -F'\t' '$5=="OK" {print $4 "\t" $1}' "$TMPD/quota.tsv" | sort -nr | head -1 | cut -f2)"
+RECOMMENDED="$(awk -F'\t' '$5=="OK" {print $4 "\t" $1}' "$TMPD/quota.tsv" | sort -s -nr | head -1 | cut -f2)"
 if [ -z "$RECOMMENDED" ]; then
-  RECOMMENDED="$(head -1 "$TMPD/quota.tsv" | cut -f1)"
-  warn "no candidate region shows remaining $MODEL_FAMILY GlobalStandard quota > 0."
-  manual "Request a quota increase (Foundry portal -> Management center -> Quota -> Request increase; on Azure for Students approval is NOT guaranteed) or pick a region where the Quota page shows remaining > 0 TPM. See scripts/README.md section 3."
+  # do NOT print a deployment recommendation — deploying the model would fail
+  # and can leave billable resources behind on a zero-quota student subscription
+  err "no candidate region has remaining $MODEL_FAMILY GlobalStandard quota > 0 — DO NOT DEPLOY yet."
+  manual "Request a quota increase (Foundry portal https://ai.azure.com -> Management center -> Quota -> Request increase; on Azure for Students approval is NOT guaranteed) or pick a region where the Quota page shows remaining > 0 TPM. See scripts/README.md section 3."
+  info "======================================================="
+  exit 3
 fi
 printf '\nRECOMMENDED LOCATION: %s\n' "$RECOMMENDED"
 info "Use this value as the 'location' parameter of: az deployment sub create --template-file infrastructure/main.bicep --location $RECOMMENDED --parameters location=$RECOMMENDED rgName=rg-clc3-<lastname> --name clc3-2026"
