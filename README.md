@@ -249,10 +249,17 @@ ContainerAppConsoleLogs_CL
 // function executions (worker telemetry via App Insights -> same workspace)
 AppTraces | where Message contains "AnalyzeImage" | order by TimeGenerated desc | take 20
 
-// blob uploads seen by the storage account (diagnostic settings)
+// blob uploads seen by the storage account (diagnostic settings on
+// blobServices/default -> resource-specific StorageBlobLogs table)
+StorageBlobLogs
+| where OperationName in ("PutBlob", "PutBlock", "PutBlockList")
+| project TimeGenerated, OperationName, Uri_s, StatusCode_d, CallerIpAddress_s
+| order by TimeGenerated desc | take 20
+
+// AI token usage per call (Foundry account diagnostic setting, no payloads)
 AzureDiagnostics
-| where ResourceProvider == "MICROSOFT.STORAGE" and Category == "StorageWrite"
-| project TimeGenerated, Resource, OperationName, requestUri_s, statusCode_d
+| where ResourceProvider == "MICROSOFT.COGNITIVESERVICES" and Category == "AzureOpenAIRequestUsage"
+| project TimeGenerated, OperationName, tokenCount_d = tolong(properties_s.tokenCount)
 | order by TimeGenerated desc | take 20
 
 // Cosmos data-plane operations (the function's output-binding writes)
