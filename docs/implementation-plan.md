@@ -13,6 +13,14 @@
    - sends the image to the AI service via the **Foundry SDK**,
    - writes the resulting JSON into **Cosmos DB via an output binding**.
 
+## Locked decisions (2026-11-14)
+
+1. Flex Consumption function in **Python 3.13**, v2 programming model (`function_app.py` + decorators).
+2. Model: **gpt-4o-mini** (version `2024-07-18`, deployment type **GlobalStandard**, capacity 1), deployed into the Foundry project.
+3. Output: **Cosmos DB output binding only** — no result-blob output binding and no `results` blob container; the Cosmos document is the single source of truth.
+4. Custom Vision "extra" section: **out of scope for now** (service deprecated; can be revisited later).
+5. Budget constraint: students have **≤ ~USD 80 per subscription** (Azure for Students credit); the design must stay **well below** that — see Part 6 for the cost validation.
+
 ---
 
 # Part 1 — Research: documentation of the Azure services in scope
@@ -72,7 +80,7 @@ All facts below were verified against Microsoft Learn / PyPI / Azure-Samples on 
 
 | Fact | Detail | Source |
 |---|---|---|
-| Storage account | **StorageV2 (general-purpose v2)** required for Event Grid blob subscriptions; containers: `imageanalysis` (upload target / trigger source), `results` (optional result JSON), plus host/deployment containers (`azure-webjobs-hosts`, deployment package container) | functions-event-grid-blob-trigger |
+| Storage account | **StorageV2 (general-purpose v2)** required for Event Grid blob subscriptions; containers: `imageanalysis` (upload target / trigger source), plus host/deployment containers (`azure-webjobs-hosts`, deployment package container). No `results` container needed — Cosmos is the only output (locked decision) | functions-event-grid-blob-trigger |
 | Blob data roles | Upload app: Storage Blob Data Contributor. Function identity: Storage Blob Data Owner (host + poison queue) | manage-connections |
 | Event Grid | System topic + subscription as described in 1.2; events `Microsoft.Storage.BlobCreated`; subject filter `/blobServices/default/containers/imageanalysis/blobs/` | learn.microsoft.com/azure/event-grid |
 
@@ -122,7 +130,7 @@ Student (curl/Postman/browser)
                                                      └──────────────────────────────────────┘
 ```
 
-Data flow: upload → blob in `imageanalysis` → BlobCreated event → Flex function → reads blob (input binding) → Foundry SDK sends image (base64 data URL; avoids SAS handling) to the deployed vision model with a prompt that returns strict JSON → function merges blob metadata (name, size, content type, URL) with the model JSON → writes one document via the Cosmos output binding (id = blob name, partition key `/filename`). Optional parity with 2025 behavior: also write the JSON to the `results` blob container via a blob output binding.
+Data flow: upload → blob in `imageanalysis` → BlobCreated event → Flex function → reads blob (input binding) → Foundry SDK sends image (base64 data URL; avoids SAS handling) to the deployed vision model with a prompt that returns strict JSON → function merges blob metadata (name, size, content type, URL) with the model JSON → writes one document via the **Cosmos DB output binding** (id = blob name, partition key `/filename`). Cosmos is the only output (locked decision 3).
 
 ## Proposed repo layout
 
@@ -171,19 +179,19 @@ uap-clc3-2026/
 - Delete/replace: `pom.xml`, `host.json` (v2 bundle), `infrastructure/logicapp_module.bicep`, `infrastructure/function_module.bicep` (Y1 consumption), `src/main/java/**`, `templates/`.
 
 ## WP1 — Infrastructure (Bicep), `infrastructure/`
-1. `main.bicep` (subscription scope, params `deploymentName`, `rgName`, `location`, plus model params `modelName`/`modelVersion`/`modelCapacity`) → modules; outputs: function app name, container app FQDN, foundry project endpoint, cosmos endpoint, storage name.
-2. `monitoring.bicep`: Log Analytics + App Insights (disableLocalAuth).
-3. `storage.bicep`: StorageV2 account (`allowSharedKeyAccess: false` preferred; if false, all access via identity), containers `imageanalysis`, `results`, deployment package container, `azure-webjobs-hosts`; **Event Grid system topic** on the account + **event subscription** (`endpointType: AzureFunction` → function app function `AnalyzeImage`, `Microsoft.Storage.BlobCreated`, subject filter on `/imageanalysis/`).
-4. `foundry.bicep`: `Microsoft.CognitiveServices/accounts` `kind: AIServices`, `allowProjectManagement: true`, `disableLocalAuth: true`, `publicNetworkAccess: Enabled`; child `accounts/projects` (`displayName`); child `accounts/deployments` for the vision model (`gpt-4o-mini`, `GlobalStandard`, capacity 1 — cheapest sufficient for a lecture; make it a param). Output **project endpoint** `https://<account>.services.ai.azure.com/api/projects/<project>`.
-5. `cosmosdb.bicep`: serverless account, database `ImageAnalysis`, container `results` (partition key `/filename`, autoscale/serverless throughput), `sqlRoleAssignments` granting the function identity **Cosmos DB Built-in Data Contributor** at the container/database scope.
-6. `function.bicep`: plan `FC1`/`FlexConsumption`; site `functionapp,linux`, system-assigned identity, `functionAppConfig`: runtime `python` / `3.13`, `scaleAndConcurrency` (maxInstanceCount 100, instanceMemoryMB 2048), `deployment.storage` blob container + SystemAssignedIdentity; app settings:
+1. `main.bicep` (subscription scope, params `deploymentName`, `rgName`, **`location` (single region for ALL resources — default `westeurope`, fallback `northeurope`/`swedencentral` per Part 6.4)**, plus model params `modelName` = `gpt-4o-mini`, `modelVersion` = `2024-07-18`, `modelCapacity` = 1) → modules; outputs: function app name, container app FQDN, foundry project endpoint, cosmos endpoint, storage name.
+2. `monitoring.bicep`: Log Analytics (retention 30 days) + App Insights (disableLocalAuth).
+3. `storage.bicep`: StorageV2 account (`allowSharedKeyAccess: false`; all access via identity), container `imageanalysis`, deployment package container, `azure-webjobs-hosts`; **lifecycle rule** deleting blobs older than 7 days; **Event Grid system topic** on the account + **event subscription** (`endpointType: AzureFunction` → function app function `AnalyzeImage`, `includedEventTypes: Microsoft.Storage.BlobCreated`, subject filter `beginsWith /blobServices/default/containers/imageanalysis/blobs/`).
+4. `foundry.bicep`: `Microsoft.CognitiveServices/accounts` `kind: AIServices`, `allowProjectManagement: true`, `disableLocalAuth: true`, `publicNetworkAccess: Enabled`; child `accounts/projects` (`displayName`); child `accounts/deployments` for the vision model (`gpt-4o-mini` 2024-07-18, `GlobalStandard`, capacity 1). Output **project endpoint** `https://<account>.services.ai.azure.com/api/projects/<project>`. Note: deployment fails fast if the student's gpt-4o-mini quota in that region is 0 TPM — README pre-flight step (Part 6.4) mitigates.
+5. `cosmosdb.bicep`: **serverless** account (no RU/s baseline — Part 6), database `ImageAnalysis`, container `results` (partition key `/filename`), `sqlRoleAssignments` granting the function identity **Cosmos DB Built-in Data Contributor** at the container/database scope.
+6. `function.bicep`: plan `FC1`/`FlexConsumption`; site `functionapp,linux`, system-assigned identity, `functionAppConfig`: runtime `python` / `3.13`, `scaleAndConcurrency` (**maxInstanceCount 40**, instanceMemoryMB **2048**, no always-ready), `deployment.storage` blob container + SystemAssignedIdentity; app settings:
    - `AzureWebJobsStorage__blobServiceUri/__queueServiceUri/__tableServiceUri` + `__credential: managedidentity` (host + blob trigger connection)
    - `FOUNDRY_PROJECT_ENDPOINT` = project endpoint, `FOUNDRY_MODEL_DEPLOYMENT` = deployment name
    - `COSMOS_CONNECTION__accountEndpoint` + `__credential: managedidentity`
-   - `APPLICATIONINSIGHTS_CONNECTION_STRING`, `APPLICATIONINSIGHTS_AUTHENTICATION_STRING: Authorization=AAD`, `FUNCTIONS_WORKER_RUNTIME` not needed for Flex (set via site config) — verify.
+   - `APPLICATIONINSIGHTS_CONNECTION_STRING`, `APPLICATIONINSIGHTS_AUTHENTICATION_STRING: Authorization=AAD`
    - RBAC: function identity → Storage Blob Data Owner (storage account), Cosmos DB Built-in Data Contributor (cosmos scope), **Azure AI User** (foundry project).
-7. `containerapp.bicep`: Log Analytics-backed `managedEnvironments`, `Microsoft.ContainerRegistry/registries` (Basic), `containerApps` with system identity, ingress external targetPort 8080, image placeholder (`<acr>.azurecr.io/upload-app:latest`), env vars `STORAGE_ACCOUNT_NAME`, `CONTAINER_NAME=imageanalysis`; RBAC: app identity → Storage Blob Data Contributor.
-- Deploy: `az deployment sub create --template-file infrastructure/main.bicep --location westeurope` (same UX as 2025 README; keep the "re-run if role assignment fails" note — AAD propagation delay).
+7. `containerapp.bicep`: Log Analytics-backed `managedEnvironments`, `Microsoft.ContainerRegistry/registries` (**Basic** — $0.1666/day, the only fixed cost), `containerApps` with system identity, ingress external targetPort 8080, `minReplicas: 0`, `maxReplicas: 3`, 0.25 vCPU/0.5 GiB, image placeholder (`<acr>.azurecr.io/upload-app:latest`), env vars `STORAGE_ACCOUNT_NAME`, `CONTAINER_NAME=imageanalysis`; RBAC: app identity → Storage Blob Data Contributor.
+- Deploy: `az deployment sub create --template-file infrastructure/main.bicep --location <location>` (same UX as 2025 README; keep the "re-run if role assignment fails" note — AAD propagation delay).
 
 ## WP2 — Upload Container App, `src/upload-app/`
 - FastAPI app: `GET /` → minimal HTML upload form; `GET /health`; `POST /upload` (multipart file) → `BlobServiceClient` with `DefaultAzureCredential` → upload to `imageanalysis` container (content type from upload) → return JSON `{ blobName, url }`.
@@ -223,13 +231,19 @@ uap-clc3-2026/
 - `containerapp-deploy.yml`: `az acr build` (or build-push-action) + `az containerapp update --image`.
 
 ## WP5 — Docs & devcontainer
-- Rewrite `README.md` for students: prerequisites (VS Code, Docker, Azure for Students subscription, Responsible AI acknowledgement — unchanged from 2025), infra deploy, function deploy, container app deploy, end-to-end test (upload → Cosmos), troubleshooting (Event Grid subscription health, AAD propagation on role assignments, purging Cognitive Services accounts, model quota), cleanup (`az group delete`).
+- Rewrite `README.md` for students:
+  - prerequisites: VS Code, Docker, Azure for Students subscription, Responsible AI acknowledgement (unchanged from 2025);
+  - **pre-flight checks**: verify allowed-regions policy, verify gpt-4o-mini quota > 0 in chosen region (Foundry portal), pick `location` (westeurope, fallback northeurope/swedencentral if ACA env creation fails with AKSCapacityHeavyUsage);
+  - **set a free budget alert** (`az consumption budget create --amount 40 ...`) before deploying anything;
+  - infra deploy, function deploy, container app deploy, end-to-end test (upload → Cosmos);
+  - troubleshooting: Event Grid subscription health, AAD propagation on role assignments, purging soft-deleted Cognitive Services accounts, model quota errors, ACA region capacity errors;
+  - **cleanup** (`az group delete --name $RG --yes --no-wait` — deletes the daily-rated ACR too).
 - Keep the step-by-step portal screenshots where still valid; replace Logic App screenshots with Foundry portal + function binding view.
 - Update `.devcontainer`.
 
 ## WP6 — Validation, cost & cleanup
 - Acceptance checklist: infra deploys green; function listed in portal with blob trigger (Event Grid) enabled; upload via curl/Postman → document appears in Cosmos within seconds; App Insights shows the execution; ACA returns 200 and blob exists.
-- Cost notes for students: serverless Cosmos, FC1 pay-per-execution, `gpt-4o-mini` GlobalStandard capacity 1 (tokens are the cost driver), ACA scale-to-zero; estimate < a few € for the exercise.
+- Cost validation: per Part 6 — expected spend ≈ **$3 per student with cleanup after ~14 days; ≈ $20–25 worst case if resources are left running all semester** (dominated by ACR Basic at $0.17/day; everything else is scale-to-zero/serverless/inside free grants; model ≈ $0.001/image). Well below the ~$80 student cap; >10× cheaper per day than the 2025 example (~$2/day).
 - Cleanup script/instructions; purge note for Cognitive Services (soft-deleted names block re-deployment).
 
 ---
@@ -248,24 +262,96 @@ uap-clc3-2026/
 | Custom Vision extra (training/prediction accounts, customvision.ai) | Drop or mark legacy — Custom Vision is deprecated |
 | `pom.xml`, Java sources, `templates/` | Removed |
 
-# Part 5 — Decisions & open questions
+# Part 5 — Decisions
 
-1. **Language for the Flex function:** recommended **Python 3.13 (v2 model)** — best docs, concise decorators, first-class Foundry SDK; Java 17/21 *is* supported on Flex Consumption now, so a Java variant is possible if you prefer staying on the original stack. → needs your call.
-2. **Model:** `gpt-4o-mini` (cheapest, vision-capable, good availability in westeurope on student subscriptions) vs `gpt-4o`. Recommend gpt-4o-mini as default, param in Bicep.
-3. **Result blob parity:** keep writing the JSON to the `results` blob container via an additional blob output binding (2025 behavior), or Cosmos only? Recommend keeping both bindings — it demonstrates multi-binding nicely and costs nothing.
-4. **Region:** keep `westeurope` (as in 2025) — confirm availability of chosen model + Flex Consumption there during implementation.
-5. **Custom Vision extra:** drop (deprecated) — confirm.
+All open questions from the first draft are now **locked** — see "Locked decisions" at the top of this document (Python 3.13 / gpt-4o-mini / Cosmos-only output / Custom Vision ignored). Remaining implementation-level choices (region, exact API versions) are parameterized in Bicep and validated in Part 6.
 
-# Part 6 — Risks & notes
+# Part 6 — Cost & availability validation for student subscriptions (≤ ~USD 80 cap)
+
+Validated 2026-11-14 against Azure pricing pages, Microsoft Learn and current Microsoft Q&A reports. All prices USD list prices; westeurope ≈ East US list for the services below. Assumption for projections: **one resource group per student, exercise active ~14 days, each student uploads ~20–50 images** (a "class day" ≈ 30 students × 50 images = 1,500 images).
+
+## 6.1 Per-component cost model
+
+| Component | Pricing model (2026) | Free grant | Lecture-scale cost |
+|---|---|---|---|
+| **ACR (Basic)** — required to host the upload-app image | **$0.1666/day ≈ $5.00/month**, 10 GB incl., extra $0.10/GB-month | none | **Only fixed cost**: $0.17/day while it exists |
+| **Container App (Consumption)** | per vCPU-s + GiB-s + request | **180,000 vCPU-s, 360,000 GiB-s, 2M requests/month/subscription** | scale-to-zero, minReplicas=0 → **≈ $0** (free grant far exceeds lecture traffic) |
+| **Function — Flex Consumption (FC1)** | per execution + vCPU-s/GB-s during execution (~$0.000016/GB-s, min 100 ms/128 MB) | **250,000 executions + 100,000 GB-s/month/subscription** | thousands of executions → **≈ $0** (inside grant); 2 GiB × 30 s per image = 60 GB-s |
+| **Foundry / gpt-4o-mini (GlobalStandard)** | input **$0.15 / 1M tokens**, output **$0.60 / 1M tokens**; image billed as input tokens (4o-family tiling: 85 base + 170 per 512px tile → ~765–1,105 tokens for a 1–2 MP photo) | none (pay per token) | ≈ **$0.0005–0.001 per image** → 1,500 images/class-day ≈ **$0.75–1.50**; even 10,000 images ≈ $5–10. Verify the exact image-input meter for gpt-4o-mini on the Azure OpenAI pricing page during implementation |
+| **Cosmos DB serverless (NoSQL)** | **$0.25 per million RUs** + ~$0.25/GB-month storage | (alternative: Cosmos **free tier** 1,000 RU/s + 25 GB, one per subscription) | one doc write ≈ 10–20 RUs → **≈ $0.00**; use **serverless** (no RU/s baseline) |
+| **Storage GPv2 (Hot, LRS)** | ~$0.018–0.02/GB-month; writes $0.05/10k, reads $0.004/10k | 5 GB/12 months (free account) | a few hundred MB + few thousand ops → **< $0.01/month** |
+| **Event Grid** | $0.60 per million operations | **first 100,000 ops/month free** | blob events only → **≈ $0** |
+| **Log Analytics / App Insights** | Analytics Logs ~$2.30/GB (regional) | **first 5 GB/month free** | function+ACA telemetry for a lecture ≈ few hundred MB → **≈ $0**; set retention 30 days |
+| **Budgets/alerts (Cost Management)** | free | — | free |
+
+## 6.2 Projection vs. the USD 80 cap
+
+| Scenario | Cost per student |
+|---|---|
+| Exercise done properly (resources deleted after ~14 days) | ACR $2.50 + model ~$0.05 + rest ≈ **$0** → **≈ $3** |
+| Worst case: student forgets cleanup, resources live the whole semester (~16 weeks = 112 days) | ACR $18.70 + model usage (≤ a few $ at sane usage) + storage/logs ≈ **$0.01** → **≈ $20–25** |
+| 2025 example for comparison | ~$2/day → **$60+/month** if left running — dangerously close to the credit cap |
+
+**Conclusion: the modernized design lands at ~$3 (with cleanup) to ~$25 (worst case, no cleanup) per student — comfortably below the ~$80 cap, and >10× cheaper per day than the 2025 version ($0.17/day fixed vs ~$2/day).** The single fixed cost is ACR Basic; everything else is scale-to-zero / serverless / inside monthly free grants.
+
+## 6.3 Cost guardrails to build into the exercise
+
+1. **One region for everything** (storage, Cosmos, Foundry, function, ACA, ACR in the same `location`) — cross-region egress is the classic hidden cost; make `location` a single Bicep param, default `westeurope`.
+2. **Budget + alert (free)** at subscription level: README step with `az consumption budget create --amount 40 ...` (alerts at 50%/80%/100%, actual + forecasted) so students get an email before burning credit.
+3. **Cleanup is part of the exercise**: README section + one-liner `az group delete --name $RG --yes --no-wait`; emphasize deleting the **ACR** (the only daily-rated resource).
+4. ACA: `minReplicas: 0`, `maxReplicas: 3` (small), 0.25 vCPU / 0.5 GiB — idle cost $0.
+5. Flex: `maximumInstanceCount: 40`, `instanceMemoryMB: 2048` (azure-ai-projects needs the memory; 512 MB would OOM), no always-ready instances.
+6. Cosmos: **serverless** capability (no provisioned baseline); partition key `/filename`; optionally apply the Cosmos free tier instead (1,000 RU/s + 25 GB free, one per subscription).
+7. gpt-4o-mini deployment: `sku: GlobalStandard, capacity: 1` (minimum); prompt asks for compact JSON to keep output tokens low; cap guidance in README (~a few thousand images per student is still < $10).
+8. Storage: Hot LRS; **lifecycle rule** deleting blobs in `imageanalysis` older than 7 days; Event Grid subscription filtered to `Microsoft.Storage.BlobCreated` with subject `beginsWith /blobServices/default/containers/imageanalysis/blobs/`.
+9. Log Analytics retention 30 days; no availability tests; sampling off (volume is tiny).
+10. `disableLocalAuth: true` / `allowSharedKeyAccess: false` where possible (security, not cost) — all access via managed identity.
+
+## 6.4 Availability validation for Azure for Students (westeurope, Nov 2026)
+
+| Component | Status in westeurope | Student-subscription caveat | Fallback |
+|---|---|---|---|
+| Storage GPv2, Event Grid, ACR, Log Analytics/App Insights, Cosmos DB | available | none | — |
+| Flex Consumption (FC1) | supported (verify per-subscription with `az functionapp list-flexconsumption-locations`) | none | `northeurope` |
+| Container Apps | **currently capacity-constrained for NEW environments in westeurope** (`AKSCapacityHeavyUsage` / `ManagedEnvironmentCapacityHeavyUsageError`, ongoing since Feb 2026, still reported Oct–Nov 2026; centralus also affected since 30 Sep 2026) | none, but region must be chosen where env creation works | `northeurope`, `swedencentral`, `germanywestcentral` — README must include a "pick a working region" step and retry guidance |
+| Foundry resource (`AIServices`) + project | available | student subscriptions have an **"Allowed resource deployment regions" Azure Policy** — each subscription allows only a specific region set (westeurope worked for the 2025 exercise); students must check their policy assignment and use an allowed region | check policy in portal; if Foundry regions not allowed, open a region-access support request |
+| gpt-4o-mini GlobalStandard | model available in westeurope (region availability table, version 2024-07-18) | **default TPM quota on student subscriptions is frequently 0** in many regions and quota-increase requests are often denied on student subs; some models have default quota mainly in `swedencentral` / `eastus2` | **before** deploying infra: open Foundry portal → Models + endpoints → check quota for gpt-4o-mini in the chosen region; if 0, submit quota increase request early, or switch region/model to one with default quota |
+| Responsible AI terms | required once per subscription before creating AI resources | unchanged from 2025 README | — |
+
+**Availability conclusion:** all components are available to students in EU regions; the two real risks are (a) ACA environment creation capacity in westeurope right now, and (b) gpt-4o-mini quota = 0 on student subscriptions. Both are mitigated by making `location` a parameter with documented fallbacks and by adding a pre-flight quota/region check step to the README. If a student's allowed-regions policy excludes all Foundry-capable regions, the fallback is a region-access support request (documented in Microsoft Q&A) — not a different subscription type.
+
+# Part 7 — Risks & notes
 
 - **Event Grid is mandatory on Flex** for blob triggers; without the system topic/subscription the function never fires — the #1 troubleshooting item; add a portal check step in the README.
+- **ACA westeurope capacity** (`AKSCapacityHeavyUsage`, ongoing since Feb 2026): README must instruct students to try `westeurope` first and fall back to `northeurope`/`swedencentral` if environment creation fails; keep everything in one region to avoid egress costs.
+- **gpt-4o-mini quota on student subscriptions is often 0 TPM**: add a pre-flight step (Foundry portal → check quota; request increase early; else switch region to one with default quota, e.g. `swedencentral`/`eastus2`, or pick another model). Deployment in Bicep will fail fast with a clear quota error if quota is 0 — surface it in the README troubleshooting.
+- **Student allowed-regions policy**: each Azure for Students subscription has an "Allowed resource deployment regions" policy; the README must tell students to verify their allowed regions and choose a `location` that satisfies all services.
 - Flex has **no remote build** → CI must build the Python package locally (`--build local`) or in a container.
 - AAD propagation delay on role assignments → keep the "re-run deployment" note from 2025.
 - Soft-deleted Cognitive Services accounts block re-creation with the same name → keep purge instructions.
 - Responsible AI terms must be accepted per subscription before the Foundry resource can be created (student step, unchanged).
-- Azure for Students: verify model quota for the chosen deployment in westeurope; fall back to another region/model if quota is 0.
+- **Cost**: only ACR Basic is daily-rated ($0.17/day); add the free budget alert at $40 and the cleanup step — see Part 6. If a student leaves resources running all semester, worst case ≈ $20–25, still well below the ~$80 credit.
 
 # Appendix — Research sources (accessed 2026-11-14)
+
+## Functional / SDK / binding docs
+- (as listed in Part 1): Foundry quickstart & SDK overview, azure-ai-projects PyPI (2.11.0), gpt-with-vision, Foundry RBAC, model deployments, accounts/projects Bicep reference, TechCommunity Foundry IaC blog, Flex Consumption plan & how-to, supported languages, flex-consumption-samples Bicep, blob trigger / event-grid blob trigger + azd Python sample, Cosmos output binding, manage-connections (identity-based), Python v2 reference, Container Apps get-started / containerapp-up / managed-identity / Bicep template references, built-in roles (ai-machine-learning).
+
+## Pricing & availability docs (Part 6)
+- Container Apps billing (free grant 180k vCPU-s / 360k GiB-s / 2M requests per month): https://learn.microsoft.com/azure/container-apps/billing · product page https://azure.microsoft.com/products/container-apps
+- ACR pricing (Basic $0.1666/day ≈ $5/month, 10 GB incl.): https://azure.microsoft.com/pricing/details/container-registry/
+- Azure Functions pricing — Flex Consumption free grant 250,000 executions + 100,000 GB-s/month: https://azure.microsoft.com/pricing/details/functions/ · https://learn.microsoft.com/azure/azure-functions/functions-consumption-costs
+- Cosmos DB serverless ($0.25/million RU, ~$0.25/GB-month) + free tier (1,000 RU/s + 25 GB per subscription): https://azure.microsoft.com/pricing/details/cosmos-db/serverless/ · https://azure.microsoft.com/pricing/free-services
+- Azure OpenAI / Foundry model pricing (gpt-4o-mini $0.15/$0.60 per 1M in/out tokens; image billed as input tokens): https://azure.microsoft.com/pricing/details/azure-openai/ · image token tiling: https://developers.openai.com/api/docs/guides/images-vision
+- Blob Storage pricing (Hot LRS ≈ $0.0184/GB-month first 50 TB; writes $0.05/10k, reads $0.004/10k): https://azure.microsoft.com/pricing/details/storage/blobs/
+- Event Grid pricing (first 100k ops/month free, then $0.60/million): https://azure.microsoft.com/pricing/details/event-grid/
+- Azure Monitor / Log Analytics (Analytics Logs ≈ $2.30/GB, first 5 GB/month free): https://azure.microsoft.com/pricing/details/monitor/ · https://learn.microsoft.com/azure/azure-monitor/logs/cost-logs
+- Azure for Students ($100 credit / 12 months; allowed-regions policy): https://azure.microsoft.com/pricing/offers/ms-azr-0170p · https://learn.microsoft.com/answers/questions/5925396 (which regions work) · https://learn.microsoft.com/answers/questions/5916405 (region access / Foundry)
+- Model region availability (gpt-4o-mini 2024-07-18): https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure-region-availability
+- Student quota reports (0 TPM for gpt-4o-mini in some regions; increases often denied on student subs; default quota in swedencentral/eastus2): https://learn.microsoft.com/answers/questions/5780281 · https://learn.microsoft.com/answers/questions/5816495 · https://learn.microsoft.com/answers/questions/5550619 · quotas doc: https://learn.microsoft.com/azure/foundry/openai/quotas-limits
+- ACA westeurope capacity restriction (AKSCapacityHeavyUsage since Feb 2026, still reported Sep–Nov 2026; centralus since 30 Sep 2026): https://learn.microsoft.com/answers/questions/5816808 · https://learn.microsoft.com/answers/questions/5922755 · https://learn.microsoft.com/answers/questions/6025361
+- Flex Consumption supported regions (dynamic list): `az functionapp list-flexconsumption-locations` · https://learn.microsoft.com/azure/azure-functions/flex-consumption-how-to
+- Cost Management budgets (free): `az consumption budget create` · https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets
 
 - Foundry SDK quickstart & SDK overview: https://learn.microsoft.com/azure/foundry/quickstarts/get-started-code · https://learn.microsoft.com/azure/foundry/how-to/develop/sdk-overview
 - azure-ai-projects on PyPI (2.11.0): https://pypi.org/project/azure-ai-projects/
