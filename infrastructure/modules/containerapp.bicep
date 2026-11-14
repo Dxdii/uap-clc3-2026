@@ -7,7 +7,8 @@ param location string
 param nameSuffix string
 param tags object
 param workspaceCustomerId string
-param workspaceSharedKey string
+@secure()
+param workspaceSharedKey string // Log Analytics shared key for the ACA environment (never printed)
 param storageAccountName string
 param imageContainerName string
 
@@ -66,8 +67,9 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
       registries: [
         {
           server: acr.properties.loginServer
-          // pull auth uses the environment's system-assigned identity,
+          // pull auth uses THIS app's system-assigned identity ('system'),
           // which gets AcrPull on the registry in modules/rbac.bicep
+          identity: 'system'
         }
       ]
     }
@@ -108,7 +110,6 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
 output name string = app.name
 output fqdn string = app.properties.configuration.ingress.fqdn
 output principalId string = app.identity.principalId
-output environmentPrincipalId string = environment.identity.principalId
 output acrId string = acr.id
 output acrName string = acr.name
 output acrLoginServer string = acr.properties.loginServer

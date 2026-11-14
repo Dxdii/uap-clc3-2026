@@ -9,7 +9,9 @@
 //   - Microsoft Foundry resource (AIServices) + project + gpt-4o-mini deployment
 //   - Cosmos DB for NoSQL (serverless) — database ImageAnalysis / container results
 //   - Azure Functions app on the Flex Consumption plan (FC1) with system identity
-//   - Event Grid subscription -> function 'AnalyzeImage' (blob trigger source)
+//     (the Event Grid subscription -> function 'AnalyzeImage' is created AFTER the
+//      function code is published — see .github/workflows/function-deploy.yml —
+//      because AzureFunction endpoint validation requires the function to exist)
 //   - Container Apps environment + ACR + upload app (image placeholder)
 //   - All RBAC role assignments (managed identities only, no keys in code)
 //
@@ -67,6 +69,7 @@ module rg 'modules/resourcegroup.bicep' = {
 module monitoring 'modules/monitoring.bicep' = {
   name: '${deploymentName}-monitoring'
   scope: resourceGroup(rgName)
+  dependsOn: [rg] // rg module creates the resource group these modules deploy into
   params: {
     location: location
     nameSuffix: nameSuffix
@@ -77,6 +80,7 @@ module monitoring 'modules/monitoring.bicep' = {
 module storage 'modules/storage.bicep' = {
   name: '${deploymentName}-storage'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     location: location
     nameSuffix: nameSuffix
@@ -88,6 +92,7 @@ module storage 'modules/storage.bicep' = {
 module foundry 'modules/foundry.bicep' = {
   name: '${deploymentName}-foundry'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     location: location
     nameSuffix: nameSuffix
@@ -103,6 +108,7 @@ module foundry 'modules/foundry.bicep' = {
 module cosmos 'modules/cosmosdb.bicep' = {
   name: '${deploymentName}-cosmos'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     location: location
     nameSuffix: nameSuffix
@@ -113,6 +119,7 @@ module cosmos 'modules/cosmosdb.bicep' = {
 module functionApp 'modules/function.bicep' = {
   name: '${deploymentName}-function'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     location: location
     nameSuffix: nameSuffix
@@ -121,7 +128,6 @@ module functionApp 'modules/function.bicep' = {
     blobEndpoint: storage.outputs.blobEndpoint
     deploymentContainerName: storage.outputs.deploymentContainerName
     systemTopicName: storage.outputs.systemTopicName
-    imageContainerName: storage.outputs.imageContainerName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     foundryProjectEndpoint: foundry.outputs.projectEndpoint
     modelDeploymentName: modelDeploymentName
@@ -132,6 +138,7 @@ module functionApp 'modules/function.bicep' = {
 module containerApp 'modules/containerapp.bicep' = {
   name: '${deploymentName}-containerapp'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     location: location
     nameSuffix: nameSuffix
@@ -149,6 +156,7 @@ module containerApp 'modules/containerapp.bicep' = {
 module rbac 'modules/rbac.bicep' = {
   name: '${deploymentName}-rbac'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     storageAccountName: storage.outputs.storageAccountName
     acrName: containerApp.outputs.acrName
@@ -157,7 +165,6 @@ module rbac 'modules/rbac.bicep' = {
     foundryProjectName: foundry.outputs.projectName
     functionPrincipalId: functionApp.outputs.principalId
     containerAppPrincipalId: containerApp.outputs.principalId
-    containerAppEnvironmentPrincipalId: containerApp.outputs.environmentPrincipalId
   }
 }
 
@@ -165,9 +172,10 @@ module rbac 'modules/rbac.bicep' = {
 module cosmosRbac 'modules/cosmosdb-rbac.bicep' = {
   name: '${deploymentName}-cosmos-rbac'
   scope: resourceGroup(rgName)
+  dependsOn: [rg]
   params: {
     cosmosAccountName: cosmos.outputs.accountName
-    cosmosDatabaseId: cosmos.outputs.databaseId
+    cosmosDatabaseName: cosmos.outputs.databaseName
     functionPrincipalId: functionApp.outputs.principalId
   }
 }

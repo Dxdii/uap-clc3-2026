@@ -2,8 +2,11 @@
 // assigned identity. Hosts the single function 'AnalyzeImage':
 //   blob trigger (Event Grid source) -> Foundry SDK -> Cosmos DB output binding
 //
-// Also creates the Event Grid event subscription that feeds the blob trigger
-// (needs both the storage topic and this function app -> lives here).
+// NOTE: the Event Grid event subscription that feeds the blob trigger is NOT
+// created here — an AzureFunction endpoint is validated against the function,
+// which only exists after the code is published. It is created right after
+// 'func azure functionapp publish' in .github/workflows/function-deploy.yml
+// (manual equivalent: see README.md) using the 'functionResourceId' output.
 
 param location string
 param nameSuffix string
@@ -13,8 +16,8 @@ param storageAccountName string
 param blobEndpoint string // e.g. https://st....blob.core.windows.net/
 param deploymentContainerName string
 param systemTopicName string
-param imageContainerName string
-param appInsightsConnectionString string
+@secure()
+param appInsightsConnectionString string // embeds the App Insights instrumentation key
 param foundryProjectEndpoint string
 param modelDeploymentName string
 param cosmosAccountEndpoint string
@@ -121,34 +124,21 @@ resource site 'Microsoft.Web/sites@2025-03-01' = {
   }
 }
 
-// Event Grid subscription: BlobCreated in 'imageanalysis' -> function app.
-// On Flex Consumption the blob trigger REQUIRES the Event Grid source.
-resource topic 'Microsoft.EventGrid/systemTopics@2025-06-01' existing = {
-  name: systemTopicName
-}
-
-resource eventSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2025-06-01' = {
-  parent: topic
-  name: 'sub-${functionAppName}-${functionName}'
-  properties: {
-    destination: {
-      endpointType: 'AzureFunction'
-      properties: {
-        resourceId: site.id
-        functionName: functionName
-      }
-    }
-    filter: {
-      includedEventTypes: [
-        'Microsoft.Storage.BlobCreated'
-      ]
-      subjectBeginsWith: '/blobServices/default/containers/${imageContainerName}/blobs/'
-    }
-    eventDeliverySchema: 'EventGridSchema'
-  }
-}
+// NOTE: the Event Grid event subscription (BlobCreated in 'imageanalysis' ->
+// this function) is created AFTER code publish, because an AzureFunction
+// endpoint is validated against the function resource itself. The endpoint
+// must be the FULL function resource id: /sites/<app>/functions/<function>.
+// Creation command (used by function-deploy.yml and documented in README.md):
+//   az eventgrid event-subscription create \
+//     --source-resource-id <storageAccountId> --name sub-<app>-AnalyzeImage \
+//     --endpoint-type azurefunction \
+//     --endpoint "${functionResourceId}" \
+//     --included-event-types Microsoft.Storage.BlobCreated \
+//     --subject-begins-with "/blobServices/default/containers/${imageContainerName}/blobs/"
 
 output name string = site.name
 output id string = site.id
 output principalId string = site.identity.principalId
 output functionName string = functionName
+output functionResourceId string = '${site.id}/functions/${functionName}'
+output systemTopicName string = systemTopicName

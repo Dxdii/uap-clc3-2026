@@ -1,0 +1,68 @@
+# Builds and deploys the Flex Consumption Python function to the function app
+# created by infra-deploy. Flex Consumption has NO remote build, so the package
+# is built locally on the runner (--build local).
+#
+# Required repo variables:
+#   FUNCTION_APP_NAME      e.g. func-<suffix> (from infra outputs)
+#   RESOURCE_GROUP         e.g. rg-clc3-<lastname>
+#   STORAGE_ACCOUNT_NAME   e.g. st<suffix>  (from infra outputs)
+#   IMAGE_CONTAINER_NAME   e.g. imageanalysis (from infra outputs)
+
+name: function-deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/image-analysis-function/**"]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/image-analysis-function
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Azure Functions Core Tools
+        run: npm install -g azure-functions-core-tools@4 --unsafe-perm
+
+      - name: Install Python dependencies (local build)
+        run: pip install -r requirements.txt
+
+      - name: Publish function app (local build — Flex has no remote build)
+        run: func azure functionapp publish "${{ vars.FUNCTION_APP_NAME }}" --build local
+
+      # The blob trigger uses an Event Grid source, which needs an event
+      # subscription with an AzureFunction endpoint. The endpoint is validated
+      # against the function itself, so the subscription can only be created
+      # AFTER the code is published. Idempotent: skips if it already exists.
+      - name: Create Event Grid subscription -> AnalyzeImage blob trigger
+        run: |
+          SUB_ID="$(az account show --query id -o tsv)"
+          STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
+          FUNC_ID="/subscriptions/$SUB_ID/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.Web/sites/${{ vars.FUNCTION_APP_NAME }}/functions/AnalyzeImage"
+          if az eventgrid event-subscription show --source-resource-id "$STORAGE_ID" --name sub-${{ vars.FUNCTION_APP_NAME }}-AnalyzeImage >/dev/null 2>&1; then
+            echo "event subscription already exists — skipping"
+          else
+            az eventgrid event-subscription create \
+              --source-resource-id "$STORAGE_ID" \
+              --name sub-${{ vars.FUNCTION_APP_NAME }}-AnalyzeImage \
+              --endpoint-type azurefunction \
+              --endpoint "$FUNC_ID" \
+              --included-event-types Microsoft.Storage.BlobCreated \
+              --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+          fi

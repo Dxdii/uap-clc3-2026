@@ -57,31 +57,47 @@ az account list-locations --query "[].{name: name, displayName: displayName}" -o
   || az account list-locations -o json > "$TMPD/locations.json"
 
 # --- 1. allowed regions from Azure Policy ------------------------------------
+# POLICY_STATE: restricted = policy list read | none = no such assignment (verified)
+#               unknown   = discovery FAILED -> must not claim "all regions allowed"
 info "Step 1: reading 'Allowed resource deployment regions' policy assignment ..."
 ALLOWED="$TMPD/allowed.txt"; : > "$ALLOWED"
+POLICY_STATE="unknown"
 if az policy assignment list --scope "/subscriptions/$SUB" -o json > "$TMPD/assignments.json" 2>"$TMPD/assignments.err"; then
   jq -r --arg def "$POLICY_DEF_ID" '
     .[] | select(.properties.policyDefinitionId == $def
                  or (.properties.displayName | test("allowed (resource deployment )?regions|allowed locations"; "i")))
        | .name' "$TMPD/assignments.json" > "$TMPD/assignment_names.txt" 2>/dev/null || true
+  FOUND_NAMES=0
   while read -r aname; do
     [ -z "$aname" ] && continue
+    FOUND_NAMES=1
     az policy assignment show --name "$aname" --scope "/subscriptions/$SUB" -o json 2>/dev/null \
       | jq -r '.properties.parameters
                  | (.listOfAllowedLocations.value // .allowedLocations.value // .listOfAllowedLocation.value // empty)
                  | .[]?' \
       >> "$ALLOWED" || true
   done < "$TMPD/assignment_names.txt"
+  if [ -s "$ALLOWED" ]; then
+    POLICY_STATE="restricted"
+  elif [ "$FOUND_NAMES" = "1" ]; then
+    POLICY_STATE="unknown" # assignment exists but its parameters could not be read
+  else
+    POLICY_STATE="none"    # verified: no allowed-regions assignment at subscription scope
+  fi
 else
   warn "could not list policy assignments: $(head -c 200 "$TMPD/assignments.err")"
-  manual "Allowed regions: portal -> Subscriptions -> your subscription -> Policies -> Assignments -> open 'Allowed resource deployment regions' -> read the listOfAllowedLocations parameter. See scripts/README.md section 1."
 fi
-if [ -s "$ALLOWED" ]; then
+if [ "$POLICY_STATE" = "restricted" ]; then
   sort -u "$ALLOWED" > "$TMPD/allowed_sorted.txt"; mv "$TMPD/allowed_sorted.txt" "$ALLOWED"
   info "allowed regions (policy): $(paste -sd, "$ALLOWED")"
 else
-  warn "no allowed-regions policy assignment found at subscription scope -> ALL regions are allowed for this subscription."
   jq -r '.[].name' "$TMPD/locations.json" > "$ALLOWED"
+  if [ "$POLICY_STATE" = "none" ]; then
+    info "no allowed-regions policy assignment found at subscription scope -> ALL regions are allowed for this subscription."
+  else
+    warn "allowed-regions policy could NOT be verified -> all regions are used as candidates, but this is UNVERIFIED."
+    manual "Confirm your allowed regions manually BEFORE deploying: portal -> Subscriptions -> your subscription -> Policies -> Assignments -> open 'Allowed resource deployment regions' -> read listOfAllowedLocations. See scripts/README.md section 1."
+  fi
 fi
 
 # --- 2. service availability per region --------------------------------------
@@ -97,42 +113,47 @@ flex_locations() {
   az functionapp list-flexconsumption-locations --query "[].name" -o json 2>/dev/null \
     | jq -r '.[]?' || true
 }
-{ provider_locations Microsoft.App containerApps
-  provider_locations Microsoft.Web sites
-  provider_locations Microsoft.CognitiveServices accounts
-  provider_locations Microsoft.DocumentDB databaseAccounts
-  provider_locations Microsoft.Storage storageAccounts
-  provider_locations Microsoft.EventGrid systemTopics
-  provider_locations Microsoft.ContainerRegistry registries
-  provider_locations Microsoft.OperationalInsights workspaces
-  flex_locations
-} | sort -u > "$TMPD/service_regions_raw.txt"
+# per-service region lists — the final candidate set is the INTERSECTION of ALL
+# of them (a union would let a region pass that lacks e.g. Cosmos or Event Grid)
+provider_locations Microsoft.App containerApps           | sort -u > "$TMPD/r_aca.txt"
+flex_locations                                           | sort -u > "$TMPD/r_flex.txt"
+provider_locations Microsoft.CognitiveServices accounts  | sort -u > "$TMPD/r_ai.txt"
+provider_locations Microsoft.DocumentDB databaseAccounts  | sort -u > "$TMPD/r_cosmos.txt"
+provider_locations Microsoft.Storage storageAccounts      | sort -u > "$TMPD/r_storage.txt"
+provider_locations Microsoft.EventGrid systemTopics       | sort -u > "$TMPD/r_eventgrid.txt"
+provider_locations Microsoft.ContainerRegistry registries | sort -u > "$TMPD/r_acr.txt"
+provider_locations Microsoft.OperationalInsights workspaces | sort -u > "$TMPD/r_monitor.txt"
+provider_locations Microsoft.Web sites                    | sort -u > "$TMPD/r_web.txt"
 
-# per-service files (for the intersection we use the union of required services)
-provider_locations Microsoft.App containerApps | sort -u > "$TMPD/r_aca.txt"
-flex_locations | sort -u > "$TMPD/r_flex.txt"
-provider_locations Microsoft.CognitiveServices accounts | sort -u > "$TMPD/r_ai.txt"
-{ provider_locations Microsoft.Web sites
-  provider_locations Microsoft.DocumentDB databaseAccounts
-  provider_locations Microsoft.Storage storageAccounts
-  provider_locations Microsoft.EventGrid systemTopics
-  provider_locations Microsoft.ContainerRegistry registries
-  provider_locations Microsoft.OperationalInsights workspaces
-} | sort -u > "$TMPD/r_other.txt"
-
-if [ ! -s "$TMPD/r_aca.txt" ] || [ ! -s "$TMPD/r_flex.txt" ] || [ ! -s "$TMPD/r_ai.txt" ]; then
-  warn "could not query provider region lists (az provider show) — falling back to the allowed-region list as candidates."
+SERVICE_FILES=(r_aca r_flex r_ai r_cosmos r_storage r_eventgrid r_acr r_monitor r_web)
+SERVICE_OK=1
+for f in "${SERVICE_FILES[@]}"; do
+  if [ ! -s "$TMPD/$f.txt" ]; then
+    SERVICE_OK=0
+    warn "region list for '$f' is empty — that service's availability is UNKNOWN."
+  fi
+done
+if [ "$SERVICE_OK" = "0" ]; then
+  warn "could not query all provider region lists — candidate set below is UNVERIFIED."
   manual "Service regions: compare your allowed regions with https://learn.microsoft.com/azure/azure-functions/flex-consumption-plan (Flex regions), the Container Apps region list, and the Foundry projects region list https://learn.microsoft.com/azure/foundry/reference/region-support. See scripts/README.md section 2."
-  cp "$ALLOWED" "$TMPD/r_flex.txt"; cp "$ALLOWED" "$TMPD/r_aca.txt"; cp "$ALLOWED" "$TMPD/r_ai.txt"; cp "$ALLOWED" "$TMPD/r_other.txt"
 fi
 
-# intersection: allowed AND flex AND aca AND ai AND other
-jq -n --rawfile a "$ALLOWED" --rawfile f "$TMPD/r_flex.txt" --rawfile c "$TMPD/r_aca.txt" \
-      --rawfile i "$TMPD/r_ai.txt" --rawfile o "$TMPD/r_other.txt" \
-  'def arr($s): $s | split("\n") | map(select(length > 0));
-   arr($a) as $A | arr($f) as $F | arr($c) as $C | arr($i) as $I | arr($o) as $O
-   | [$A[] | select(. as $x | $F | index($x)) | select(. as $x | $C | index($x))
-        | select(. as $x | $I | index($x)) | select(. as $x | $O | index($x))]' \
+# intersection: allowed AND every single core service
+JQ_ARGS=(--rawfile a "$ALLOWED")
+for f in "${SERVICE_FILES[@]}"; do JQ_ARGS+=(--rawfile "${f#r_}" "$TMPD/$f.txt"); done
+jq -n "${JQ_ARGS[@]}" '
+  def arr($s): $s | split("\n") | map(select(length > 0));
+  arr($a) as $A
+  | [$A[] | select(
+      (. as $x | $aca      | index($x)) and
+      (. as $x | $flex     | index($x)) and
+      (. as $x | $ai       | index($x)) and
+      (. as $x | $cosmos   | index($x)) and
+      (. as $x | $storage  | index($x)) and
+      (. as $x | $eventgrid| index($x)) and
+      (. as $x | $acr      | index($x)) and
+      (. as $x | $monitor  | index($x)) and
+      (. as $x | $web      | index($x)))]' \
   > "$TMPD/candidates.json"
 CANDIDATES="$(jq -r '.[]' "$TMPD/candidates.json" 2>/dev/null | paste -sd' ' -)"
 if [ -z "${CANDIDATES// }" ]; then
@@ -154,12 +175,21 @@ for region in $PROBE; do
   usage="$(az cognitiveservices usage list --location "$region" -o json 2>"$TMPD/usage.err")" || {
     warn "az cognitiveservices usage list failed for $region: $(head -c 150 "$TMPD/usage.err")"
     manual "Model quota for $region: portal -> Quotas, or Foundry portal https://ai.azure.com -> Management center -> Quota. CLI: az cognitiveservices usage list --location $region. See scripts/README.md section 3."
-    printf '%s\tUNKNOWN\n' "$region" >> "$TMPD/quota.tsv"; continue
+    printf '%s\tn/a\tn/a\tn/a\tQUERY_FAILED\n' "$region" >> "$TMPD/quota.tsv"; continue
   }
-  limit="$(jq -r --arg m "$MODEL_FAMILY" '
-      ([.[] | select(.name.value | test($m; "i"))]) as $all
-      | (([$all[] | select(.name.value == ("OpenAI.GlobalStandard." + $m))] | first) // $all[0] | .limit // "n/a")' <<<"$usage" 2>/dev/null)"
-  printf '%s\t%s\n' "$region" "${limit:-n/a}" >> "$TMPD/quota.tsv"
+  # exact quota entry for OUR deployment SKU only (GlobalStandard.<model>) —
+  # never fall back to another SKU's quota; rank by REMAINING capacity
+  read -r limit used remaining status < <(jq -r --arg m "OpenAI.GlobalStandard.$MODEL_FAMILY" '
+      [.[] | select(.name.value == $m)] as $gs
+      | if ($gs | length) == 0 then "n/a\tn/a\tn/a\tUNAVAILABLE"
+        else ($gs[0] |
+          [((.limit // 0) | tostring),
+           ((.currentValue // 0) | tostring),
+           (((.limit // 0) - (.currentValue // 0)) | tostring),
+           (if ((.limit // 0) - (.currentValue // 0)) > 0 then "OK" else "EXHAUSTED" end)]
+          | join("\t"))
+        end' <<<"$usage" 2>/dev/null)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$region" "${limit:-n/a}" "${used:-n/a}" "${remaining:-n/a}" "${status:-UNAVAILABLE}" >> "$TMPD/quota.tsv"
 done
 
 info "subscription quota tier:"
@@ -175,17 +205,18 @@ az vm list-usage --location "$FIRST" -o table 2>/dev/null | head -20 \
 
 # --- 5. verdict ---------------------------------------------------------------
 info "================= PRE-FLIGHT RESULT ================="
-printf '%-22s %s\n' "REGION" "gpt-4o-mini GlobalStandard quota limit (K TPM)"
-while IFS=$'\t' read -r r l; do printf '%-22s %s\n' "$r" "$l"; done < "$TMPD/quota.tsv"
+printf '%-22s %-10s %-8s %-11s %s\n' "REGION" "LIMIT(KTPM)" "USED" "REMAINING" "STATUS"
+while IFS=$'\t' read -r r l u rem st; do printf '%-22s %-10s %-8s %-11s %s\n' "$r" "$l" "$u" "$rem" "$st"; done < "$TMPD/quota.tsv"
 
-RECOMMENDED="$(awk -F'\t' '$2 ~ /^[0-9]+(\.[0-9]+)?$/ && $2+0 > 0 {print $1; exit}' "$TMPD/quota.tsv")"
+# recommend the OK region with the most REMAINING GlobalStandard quota
+RECOMMENDED="$(awk -F'\t' '$5=="OK" {print $4 "\t" $1}' "$TMPD/quota.tsv" | sort -nr | head -1 | cut -f2)"
 if [ -z "$RECOMMENDED" ]; then
-  # fall back to first candidate with numeric-but-zero or unknown, else first candidate
-  RECOMMENDED="$(awk -F'\t' 'NR==1{print $1}' "$TMPD/quota.tsv")"
-  warn "no candidate region shows $MODEL_FAMILY quota > 0."
-  manual "Request a quota increase (Foundry portal -> Management center -> Quota -> Request increase; on Azure for Students approval is NOT guaranteed) or pick a region where the Quota page shows > 0 TPM. See scripts/README.md section 3."
+  RECOMMENDED="$(head -1 "$TMPD/quota.tsv" | cut -f1)"
+  warn "no candidate region shows remaining $MODEL_FAMILY GlobalStandard quota > 0."
+  manual "Request a quota increase (Foundry portal -> Management center -> Quota -> Request increase; on Azure for Students approval is NOT guaranteed) or pick a region where the Quota page shows remaining > 0 TPM. See scripts/README.md section 3."
 fi
 printf '\nRECOMMENDED LOCATION: %s\n' "$RECOMMENDED"
-info "Use this value as the 'location' parameter of: az deployment sub create --template-file infrastructure/main.bicep --location $RECOMMENDED --parameters location=$RECOMMENDED"
-info "If Container Apps environment creation fails with AKSCapacityHeavyUsage, re-run with the next region from the table above."
+info "Use this value as the 'location' parameter of: az deployment sub create --template-file infrastructure/main.bicep --location $RECOMMENDED --parameters location=$RECOMMENDED rgName=rg-clc3-<lastname> --name clc3-2026"
+info "If the deployment fails midway: FIRST delete the partial resource group (az group delete --name <rgName> --yes), THEN re-run with a NEW deployment name (--name clc3-2026-r2) — a resource group's location is immutable, so retrying in another region also needs a fresh rgName."
+info "If Container Apps environment creation fails with AKSCapacityHeavyUsage, re-run with the next OK region from the table above (fresh rgName + deployment name)."
 info "======================================================="

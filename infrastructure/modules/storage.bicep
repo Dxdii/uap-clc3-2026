@@ -1,8 +1,9 @@
 // Storage account (GPv2 — required for Event Grid blob subscriptions) with the
 // 'imageanalysis' container (upload target / blob trigger source), the
 // Functions deployment package container, and the Event Grid system topic.
-// The event SUBSCRIPTION to the function app lives in modules/function.bicep
-// (it needs the function app id, which depends on this module -> avoids cycles).
+// The event SUBSCRIPTION to the function app is created after the function code
+// is published (AzureFunction endpoint validation needs the function to exist) —
+// see .github/workflows/function-deploy.yml and README.md.
 
 param location string
 param nameSuffix string

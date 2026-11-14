@@ -30,9 +30,13 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 
 output workspaceId string = workspace.id
 output workspaceCustomerId string = workspace.properties.customerId
-// The ACA environment needs the workspace shared key for log shipping (standard pattern).
-// disable-next-line outputs-should-not-contain-secrets
+// The ACA environment needs the workspace shared key for log shipping (standard
+// pattern). Marked @secure() so the key is never persisted as plaintext in
+// deployment history/outputs.
+@secure()
 output workspaceSharedKey string = workspace.listKeys().primarySharedKey
 output appInsightsId string = appInsights.id
 output appInsightsName string = appInsights.name
+// The connection string embeds the instrumentation key -> @secure() as well.
+@secure()
 output appInsightsConnectionString string = appInsights.properties.ConnectionString

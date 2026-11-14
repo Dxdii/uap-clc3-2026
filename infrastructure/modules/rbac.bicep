@@ -3,6 +3,7 @@
 // Role definition ids (built-in, well-known GUIDs):
 //   Storage Blob Data Owner ........ b7e6dc6d-f1e8-4753-8033-0f276bb0955b
 //   Storage Blob Data Contributor .. ba92f5b4-2d11-453d-a403-e96b0029c9fe
+//   Storage Queue Data Contributor . 974c5e8b-45b9-4653-ba55-7f855e888dfd
 //   AcrPull ........................ 7f951dda-4ed3-4680-a7ca-43fe172d538d
 //   Azure AI User .................. 53ca6127-db72-4b80-b1b0-d745d6d5456d
 //   Monitoring Metrics Publisher ... 3913510d-42f4-4e42-8a64-420c390055b5
@@ -14,11 +15,11 @@ param foundryAccountName string
 param foundryProjectName string
 param functionPrincipalId string
 param containerAppPrincipalId string
-param containerAppEnvironmentPrincipalId string
 
 var roles = {
   storageBlobDataOwner: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
   storageBlobDataContributor: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  storageQueueDataContributor: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-7f855e888dfd')
   acrPull: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
   azureAiUser: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')
   monitoringMetricsPublisher: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055b5')
@@ -40,13 +41,25 @@ resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-0
   name: '${foundryAccountName}/${foundryProjectName}'
 }
 
-// Function app identity -> Storage Blob Data Owner
-// (host storage + poison-blob queue writes of the Event Grid blob trigger)
+// Function app identity -> Storage Blob Data Owner (host storage, blob trigger input)
 resource raFuncStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storage.id, functionPrincipalId, roles.storageBlobDataOwner)
   scope: storage
   properties: {
     roleDefinitionId: roles.storageBlobDataOwner
+    principalId: functionPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Function app identity -> Storage Queue Data Contributor (the Event Grid blob
+// trigger writes poison messages / lease bookkeeping to host queues; blob roles
+// do NOT cover queue data actions)
+resource raFuncStorageQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, functionPrincipalId, roles.storageQueueDataContributor)
+  scope: storage
+  properties: {
+    roleDefinitionId: roles.storageQueueDataContributor
     principalId: functionPrincipalId
     principalType: 'ServicePrincipal'
   }
@@ -85,13 +98,15 @@ resource raCappStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// Container Apps environment identity -> AcrPull on the registry (image pulls)
-resource raEnvAcr 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, containerAppEnvironmentPrincipalId, roles.acrPull)
+// Container APP identity -> AcrPull on the registry (image pulls). The registry
+// entry in containerapp.bicep uses identity 'system' = the app's system-assigned
+// identity, so the role must be on the app principal, not the environment.
+resource raCappAcr 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, containerAppPrincipalId, roles.acrPull)
   scope: acr
   properties: {
     roleDefinitionId: roles.acrPull
-    principalId: containerAppEnvironmentPrincipalId
+    principalId: containerAppPrincipalId
     principalType: 'ServicePrincipal'
   }
 }

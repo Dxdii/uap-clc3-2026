@@ -95,6 +95,21 @@ az deployment sub create --template-file infrastructure/main.bicep \
   --location <your-region> --parameters rgName=rg-clc3-<lastname> location=<your-region>
 ```
 
-If Container Apps environment creation fails with `AKSCapacityHeavyUsage`
-(region capacity exhaustion), re-run the deployment with the next candidate
-region from `preflight.sh`.
+If the deployment **fails midway** (e.g. Container Apps environment creation
+fails with `AKSCapacityHeavyUsage` — region capacity exhaustion):
+
+1. **Delete the partial resource group first** — a resource group's location is
+   immutable, so you cannot just change the region on a retry:
+   ```bash
+   az group delete --name <rgName> --yes --no-wait
+   # wait until it is gone: az group show --name <rgName>  (should 404)
+   ```
+2. **Re-run with a fresh resource-group name AND a new deployment name** (the
+   old deployment record still references the old group):
+   ```bash
+   az deployment sub create --template-file infrastructure/main.bicep \
+     --location <next-candidate-region> --name clc3-2026-r2 \
+     --parameters rgName=rg-clc3-<lastname>-r2 location=<next-candidate-region>
+   ```
+   Pick the next candidate region from the `preflight.sh` result table (the one
+   with the most remaining gpt-4o-mini GlobalStandard quota).
