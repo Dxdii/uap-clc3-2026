@@ -1,0 +1,23 @@
+%% End-to-end architecture and request flow of the exercise pipeline.
+%% Rendered by GitHub when this file is opened; linked from README.md.
+flowchart LR
+  user(["Student: curl / Postman / browser form"])
+
+  subgraph rg["Azure resource group (single region, from preflight)"]
+    ca["Container App ca-upload-*<br/>FastAPI upload endpoint, port 8080<br/>scale-to-zero, system identity"]
+    acr["ACR acr-* (Basic)<br/>image: upload-app"]
+    st["Storage st-* (GPv2)<br/>container 'imageanalysis'"]
+    eg["Event Grid system topic systopic-*<br/>BlobCreated events"]
+    fn["Function App func-* (Flex Consumption, Python 3.13)<br/>AnalyzeImage: blob input binding"]
+    foundry["Foundry ais-* + project clc3-project<br/>model deployment gpt-5-mini"]
+    cosmos["Cosmos DB cosmos-* (serverless)<br/>ImageAnalysis / results"]
+  end
+
+  user -->|"1. POST /upload + X-Upload-Token"| ca
+  acr -->|"image pull (AcrPull on app identity)"| ca
+  ca -->|"2. PUT blob<br/>(Storage Blob Data Contributor)"| st
+  st -->|"3. BlobCreated event"| eg
+  eg -->|"4. webhook /runtime/webhooks/blobs"| fn
+  fn -->|"5. read blob (input binding)"| st
+  fn -->|"6. Foundry SDK call, Entra ID (Azure AI User)"| foundry
+  fn -->|"7. JSON result via Cosmos output binding<br/>(Cosmos DB Built-in Data Contributor)"| cosmos

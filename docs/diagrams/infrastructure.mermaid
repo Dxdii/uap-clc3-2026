@@ -1,0 +1,30 @@
+%% Infrastructure-as-code structure: one subscription-scope Bicep deployment
+%% creates one resource group with all modules.
+%% Rendered by GitHub when this file is opened; linked from docs/implementation-plan.md.
+flowchart TB
+  main["infrastructure/main.bicep<br/>deployment at subscription scope"]
+
+  main --> rg["modules/resourcegroup.bicep"]
+
+  subgraph rgscope["resource group (rgName, one region)"]
+    mon["monitoring.bicep<br/>Log Analytics workspace + App Insights (workspace-based)"]
+    sto["storage.bicep<br/>GPv2 storage + 'imageanalysis' container<br/>+ Event Grid system topic"]
+    fnd["foundry.bicep<br/>AIServices account + project + gpt-5-mini deployment"]
+    cos["cosmosdb.bicep<br/>serverless Cosmos DB: ImageAnalysis/results"]
+    fnm["function.bicep<br/>Flex Consumption plan + function app (system identity)"]
+    cam["containerapp.bicep<br/>ACA env (LA-backed) + ACR (Basic) + upload app"]
+    rbac["rbac.bicep + cosmosdb-rbac.bicep<br/>role assignments (managed identities only)"]
+    diag["diagnostics.bicep<br/>diagnostic settings -> LA workspace"]
+  end
+
+  main --> mon
+  main --> sto
+  main --> fnd
+  main --> cos
+  main --> fnm
+  main --> cam
+  main --> rbac
+  main --> diag
+  rbac -.->|"needs principalIds"| fnm
+  rbac -.-> cam
+  diag -.->|"needs resources + workspace"| mon

@@ -156,3 +156,25 @@ Findings fixed along the way (all committed on `feature/ci-token-auth`):
 * First `AnalyzeImage` execution after deploy can fail once (host/queue warm-up, "404 queue does
   not exist"); the Event Grid retry policy redelivers and the retry succeeds — expected behavior,
   documented for students.
+
+## Observability wiring validation (2026-11-14, scratch RG rg-clc3-obs, swedencentral)
+
+`infrastructure/modules/diagnostics.bicep` (7 diagnostic settings -> LA workspace) deployed green after
+one fix round (PR #5): the first deploy failed with "Category 'AppServiceHTTPLogs' is not supported" —
+categories were then verified live per resource via `az monitor diagnostic-settings categories list`.
+Live-verified results on the deployed resources:
+
+| Resource | Log categories enabled (-> LAW) | Notes |
+|---|---|---|
+| storage account | metrics only (Capacity, Transaction) | blob op logs live on the `blobServices/default` child |
+| storage `blobServices/default` | StorageRead/Write/Delete | land in resource-specific `StorageBlobLogs` table |
+| Event Grid system topic | DeliveryFailures | only category available |
+| Cosmos DB | DataPlaneRequests, QueryRuntimeStatistics, PartitionKeyStatistics, PartitionKeyRUConsumption, ControlPlaneRequests | -> `AzureDiagnostics` |
+| ACR | ContainerRegistryLoginEvents, ContainerRegistryRepositoryEvents | |
+| Foundry account | Audit, Trace, AzureOpenAIRequestUsage | `RequestResponse` deliberately off (base64 image payloads) |
+| function app (Flex site) | FunctionAppLogs, AppServiceAuditLogs, AppServiceAuthenticationLogs | Flex site supports no AppServiceHTTPLogs/ConsoleLogs |
+
+End-to-end log flow confirmed in the LAW after generating traffic (blob upload via key + Cosmos SDK
+query): `StorageBlobLogs` 31 rows, `AzureDiagnostics` DOCUMENTDB 23 rows, `AzureMetrics` 207 rows,
+`ContainerAppSystemLogs_CL` 304 rows (pre-existing ACA `appLogsConfiguration` wiring).
+Scratch RG deleted + CS account purged afterwards; subscription clean.
