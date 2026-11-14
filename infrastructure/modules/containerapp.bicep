@@ -15,7 +15,7 @@ param imageContainerName string
 @description('Image of the upload app. Defaults to a public placeholder that listens on 8080 (ingress targetPort); infra-deploy passes the ACR image once it has been pushed, so infra redeploys do not reset it.')
 param uploadAppImage string = 'nginxinc/nginx-unprivileged:latest'
 
-@description('Shared token required in the X-Upload-Token header of /upload (stored as an ACA secret, never in code). Defaults to a random GUID per deployment; retrieve it from the deployment outputs.')
+@description('Shared token required in the X-Upload-Token header of /upload (stored as an ACA secret, never in code). Pass your own value so it survives redeploys; otherwise a random GUID per deployment. Read back with: az containerapp secret show --secret-name upload-token.')
 @secure()
 param uploadToken string = newGuid()
 

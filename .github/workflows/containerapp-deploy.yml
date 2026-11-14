@@ -1,5 +1,11 @@
-# Builds the upload app image, pushes it to the ACR created by infra-deploy,
-# and updates the Container App to the new image.
+# Builds the upload app image LOCALLY, pushes it to the ACR created by
+# infra-deploy, and updates the Container App to the new image.
+#
+# NOTE: `az acr build` (ACR Tasks) is NOT used on purpose — ACR Tasks are
+# blocked on Azure for Students / free-credit subscriptions
+# (TasksOperationsNotAllowed) and require Standard/Premium SKUs. A local
+# `docker build` + `docker push` with an `az acr login --expose-token` token
+# (your Azure AD identity, AcrPush via Contributor/Owner) works everywhere.
 #
 # Required repo variables:
 #   RESOURCE_GROUP      e.g. rg-clc3-<lastname>
@@ -28,17 +34,23 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Build image in ACR and update container app
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ACR with an Azure AD token (no admin user needed)
         run: |
-          IMAGE="${{ vars.ACR_NAME }}.azurecr.io/upload-app:${{ github.sha }}"
-          az acr build \
-            --registry "${{ vars.ACR_NAME }}" \
-            --image "upload-app:${{ github.sha }}" \
-            --image "upload-app:latest" \
-            --file src/upload-app/Dockerfile \
-            src/upload-app
+          TOKEN="$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --query accessToken -o tsv)"
+          echo "$TOKEN" | docker login "${{ vars.ACR_NAME }}.azurecr.io" \
+            -u 00000000-0000-0000-0000-000000000000 --password-stdin
+
+      - name: Build and push image, update container app
+        run: |
+          SERVER="${{ vars.ACR_NAME }}.azurecr.io"
+          docker build -t "$SERVER/upload-app:${{ github.sha }}" -t "$SERVER/upload-app:latest" \
+            -f src/upload-app/Dockerfile src/upload-app
+          docker push "$SERVER/upload-app:${{ github.sha }}"
+          docker push "$SERVER/upload-app:latest"
           az containerapp update \
             --name "${{ vars.CONTAINER_APP_NAME }}" \
             --resource-group "${{ vars.RESOURCE_GROUP }}" \
-            --image "$IMAGE"
-          echo "Deployed $IMAGE"
+            --image "$SERVER/upload-app:${{ github.sha }}"
+          echo "Deployed $SERVER/upload-app:${{ github.sha }}"

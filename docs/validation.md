@@ -58,6 +58,22 @@ Notable verified-against-docs decision: an Event-Grid-sourced **blob** trigger i
 endpoint (`/runtime/webhooks/blobs?functionName=Host.Functions.<fn>&code=<blobs_extension key>`),
 not an `azurefunction` endpoint (that is only for EventGrid-*trigger* functions) — per Microsoft Learn.
 
+## Independent review by Claude Code (2026-11-14, after merge)
+
+Claude Code 2.1.325 reviewed the merged `main` with the same priorities (functional correctness +
+end-to-end deployability on a student subscription; no security/style nitpicks). Findings and fixes:
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| `@secure()` output not retrievable (`az deployment sub show --query …value` returns empty) → README step 7 token command broken | CONFIRMED empirically on a scratch deployment (`outputs.tokOut` = `{"type":"SecureString"}` with no value) | token now passed explicitly as `@secure()` param in README step 4; read-back via `az containerapp secret show`; secure output removed |
+| `az acr build` (ACR Tasks) fails on Azure for Students with `TasksOperationsNotAllowed` and needs Standard/Premium SKU | CONFIRMED via Microsoft Q&A/Learn | README step 6 + `containerapp-deploy.yml` now use local `docker build` + `docker push` with `az acr login --expose-token` (works on Basic with RBAC, no admin user) |
+| missing `containerAppName` / `acrName` deployment outputs used by README/workflows | confirmed | outputs added to `main.bicep` |
+| global name collisions / invalid chars (umlauts) from rgName-derived suffix | confirmed risk | `nameSuffix` is now `take(uniqueString(subscription().subscriptionId, rgName), 16)` — hex-only, per-subscription |
+| Cosmos output binding `create_if_not_exists=True` can 403 with Entra-only database-scope RBAC | plausible, fixed defensively | `create_if_not_exists=False` (Bicep creates db+container) |
+| hard-coded `$APP.azurewebsites.net` webhook host | fixed | `az functionapp show --query defaultHostName` in workflow + README |
+| `blobs_extension` key may lag after publish; subscription update may fail | hardened | retry loop + empty-key guard + update-or-delete-recreate in `function-deploy.yml` / README |
+| project-scoped model deployment `accounts/projects/deployments@2025-06-01` not in Learn reference pages | NOT changed — server-side what-if RP preflight rejects the account-level form and accepts the project-scoped form (verified earlier); kept as "needs manual check" for the first real student deploy |
+
 ## Not validated here (needs Azure / Docker daemon)
 
 * `docker build src/upload-app` — Docker daemon was not running in this environment; the

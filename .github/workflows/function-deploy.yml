@@ -59,13 +59,35 @@ jobs:
           APP="${{ vars.FUNCTION_APP_NAME }}"
           STORAGE_ID="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/${{ vars.STORAGE_ACCOUNT_NAME }}"
           SUB_NAME="sub-$APP-AnalyzeImage"
-          BLOBS_KEY="$(az rest --method POST \
-            --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
-            --query systemKeys.blobs_extension -o tsv)"
-          ENDPOINT="https://$APP.azurewebsites.net/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY"
+          HOST="$(az functionapp show --name "$APP" --resource-group "$RG" --query defaultHostName -o tsv)"
+          # the blobs_extension system key can take a moment to appear after publish -> retry
+          BLOBS_KEY=""
+          for i in $(seq 1 10); do
+            # '|| true' so a 4xx/5xx from listkeys under 'bash -e' doesn't abort the step
+            BLOBS_KEY="$(az rest --method POST \
+              --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" \
+              --query systemKeys.blobs_extension -o tsv 2>/dev/null || true)"
+            # '-o tsv' prints the literal 'None' for a null query result — treat as missing
+            if [ -n "$BLOBS_KEY" ] && [ "$BLOBS_KEY" != "None" ]; then break; fi
+            BLOBS_KEY=""
+            echo "blobs_extension key not available yet (attempt $i), waiting 15s ..."
+            sleep 15
+          done
+          if [ -z "$BLOBS_KEY" ]; then
+            echo "ERROR: could not read blobs_extension system key — check the function app is running"
+            exit 1
+          fi
+          ENDPOINT="https://$HOST/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY"
           if az eventgrid event-subscription show --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" >/dev/null 2>&1; then
-            az eventgrid event-subscription update --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
-              --endpoint-type webhook --endpoint "$ENDPOINT"
+            # webhook endpoint of an existing subscription: try update, else delete+recreate
+            if ! az eventgrid event-subscription update --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
+                 --endpoint-type webhook --endpoint "$ENDPOINT" 2>/dev/null; then
+              az eventgrid event-subscription delete --source-resource-id "$STORAGE_ID" --name "$SUB_NAME"
+              az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
+                --endpoint-type webhook --endpoint "$ENDPOINT" \
+                --included-event-types Microsoft.Storage.BlobCreated \
+                --subject-begins-with "/blobServices/default/containers/${{ vars.IMAGE_CONTAINER_NAME }}/blobs/"
+            fi
           else
             az eventgrid event-subscription create --source-resource-id "$STORAGE_ID" --name "$SUB_NAME" \
               --endpoint-type webhook --endpoint "$ENDPOINT" \
