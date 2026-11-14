@@ -145,6 +145,9 @@ uap-clc3-2026/
 │   ├── infra-deploy.yml              (az deployment sub create)
 │   ├── function-deploy.yml           (func azure functionapp publish --build local)
 │   └── containerapp-deploy.yml       (az acr build + az containerapp update / up)
+├── scripts/
+│   ├── preflight.sh                  (Step 0: allowed regions + quotas, see 6.5)
+│   └── README.md                     (manual equivalents for every scripted check)
 ├── infrastructure/
 │   ├── main.bicep                    (subscription scope, orchestrates modules)
 │   └── modules/
@@ -175,11 +178,12 @@ uap-clc3-2026/
 
 ## WP0 — Repo scaffold (day 0)
 - Create the structure above in `uap-clc3-2026`; commit the 2025 repo's `extra/training_images.zip` and docs images if still wanted.
-- Update `.devcontainer` (base image with Python 3.13 + Azure CLI + Azure Functions Core Tools 4.x + Bicep CLI + Docker; VS Code extensions: Azure Functions, Azure Container Apps, Bicep).
+- Update `.devcontainer` (base image with Python 3.13 + Azure CLI + jq + Azure Functions Core Tools 4.x + Bicep CLI + Docker; VS Code extensions: Azure Functions, Azure Container Apps, Bicep).
+- **WP0.1 — `scripts/preflight.sh` per Part 6.5**: scripted allowed-regions (Azure Policy), service-region availability (`az provider show`, `az functionapp list-flexconsumption-locations`), model quota (`az cognitiveservices usage list`, quotaTiers REST), compute quota (`az vm list-usage`); defensive (never hard-fails; prints the manual step from `scripts/README.md` when a check can't run); outputs recommended `location`. Test it on a regular (non-student) subscription — no region policy there, so the "no restriction" path must work.
 - Delete/replace: `pom.xml`, `host.json` (v2 bundle), `infrastructure/logicapp_module.bicep`, `infrastructure/function_module.bicep` (Y1 consumption), `src/main/java/**`, `templates/`.
 
 ## WP1 — Infrastructure (Bicep), `infrastructure/`
-1. `main.bicep` (subscription scope, params `deploymentName`, `rgName`, **`location` (single region for ALL resources — default `westeurope`, fallback `northeurope`/`swedencentral` per Part 6.4)**, plus model params `modelName` = `gpt-4o-mini`, `modelVersion` = `2024-07-18`, `modelCapacity` = 1) → modules; outputs: function app name, container app FQDN, foundry project endpoint, cosmos endpoint, storage name.
+1. `main.bicep` (subscription scope, params `deploymentName`, `rgName`, **`location` (single region for ALL resources — taken from the pre-flight check output in Part 6.5, NOT hard-coded; common student-viable values: `swedencentral`, `francecentral`, `eastus2`, `westeurope` if the policy allows)**, plus model params `modelName` = `gpt-4o-mini`, `modelVersion` = `2024-07-18`, `modelCapacity` = 1) → modules; outputs: function app name, container app FQDN, foundry project endpoint, cosmos endpoint, storage name.
 2. `monitoring.bicep`: Log Analytics (retention 30 days) + App Insights (disableLocalAuth).
 3. `storage.bicep`: StorageV2 account (`allowSharedKeyAccess: false`; all access via identity), container `imageanalysis`, deployment package container, `azure-webjobs-hosts`; **lifecycle rule** deleting blobs older than 7 days; **Event Grid system topic** on the account + **event subscription** (`endpointType: AzureFunction` → function app function `AnalyzeImage`, `includedEventTypes: Microsoft.Storage.BlobCreated`, subject filter `beginsWith /blobServices/default/containers/imageanalysis/blobs/`).
 4. `foundry.bicep`: `Microsoft.CognitiveServices/accounts` `kind: AIServices`, `allowProjectManagement: true`, `disableLocalAuth: true`, `publicNetworkAccess: Enabled`; child `accounts/projects` (`displayName`); child `accounts/deployments` for the vision model (`gpt-4o-mini` 2024-07-18, `GlobalStandard`, capacity 1). Output **project endpoint** `https://<account>.services.ai.azure.com/api/projects/<project>`. Note: deployment fails fast if the student's gpt-4o-mini quota in that region is 0 TPM — README pre-flight step (Part 6.4) mitigates.
@@ -233,7 +237,7 @@ uap-clc3-2026/
 ## WP5 — Docs & devcontainer
 - Rewrite `README.md` for students:
   - prerequisites: VS Code, Docker, Azure for Students subscription, Responsible AI acknowledgement (unchanged from 2025);
-  - **pre-flight checks**: verify allowed-regions policy, verify gpt-4o-mini quota > 0 in chosen region (Foundry portal), pick `location` (westeurope, fallback northeurope/swedencentral if ACA env creation fails with AKSCapacityHeavyUsage);
+  - **Step 0 — pre-flight checks (Part 6.5, mandatory)**: run `scripts/preflight.sh`; if a check can't run automatically, follow the manual instructions in `scripts/README.md` (portal Policies blade for allowed regions, portal Quotas blade, Foundry portal ai.azure.com → Management center → Quota for gpt-4o-mini TPM; request quota increase or switch region if 0). Pick the single `location` from the script output (one region for all resources); if ACA env creation fails with `AKSCapacityHeavyUsage`, redeploy in the next recommended region;
   - **set a free budget alert** (`az consumption budget create --amount 40 ...`) before deploying anything;
   - infra deploy, function deploy, container app deploy, end-to-end test (upload → Cosmos);
   - troubleshooting: Event Grid subscription health, AAD propagation on role assignments, purging soft-deleted Cognitive Services accounts, model quota errors, ACA region capacity errors;
@@ -314,11 +318,53 @@ Validated 2026-11-14 against Azure pricing pages, Microsoft Learn and current Mi
 | Storage GPv2, Event Grid, ACR, Log Analytics/App Insights, Cosmos DB | available | none | — |
 | Flex Consumption (FC1) | supported (verify per-subscription with `az functionapp list-flexconsumption-locations`) | none | `northeurope` |
 | Container Apps | **currently capacity-constrained for NEW environments in westeurope** (`AKSCapacityHeavyUsage` / `ManagedEnvironmentCapacityHeavyUsageError`, ongoing since Feb 2026, still reported Oct–Nov 2026; centralus also affected since 30 Sep 2026) | none, but region must be chosen where env creation works | `northeurope`, `swedencentral`, `germanywestcentral` — README must include a "pick a working region" step and retry guidance |
-| Foundry resource (`AIServices`) + project | available | student subscriptions have an **"Allowed resource deployment regions" Azure Policy** — each subscription allows only a specific region set (westeurope worked for the 2025 exercise); students must check their policy assignment and use an allowed region | check policy in portal; if Foundry regions not allowed, open a region-access support request |
+| Foundry resource (`AIServices`) + project | available | student subscriptions have an **"Allowed resource deployment regions" Azure Policy** whose region set **varies per student subscription** (documented examples: `westeurope` for some; `eastus, eastus2, australiaeast, westus, westus3, swedencentral, francecentral, uksouth` for others) — students must discover their own set via the pre-flight check (6.5) and use an allowed region | pre-flight script/policy blade; if no Foundry-capable region is allowed, open a region-access support request |
 | gpt-4o-mini GlobalStandard | model available in westeurope (region availability table, version 2024-07-18) | **default TPM quota on student subscriptions is frequently 0** in many regions and quota-increase requests are often denied on student subs; some models have default quota mainly in `swedencentral` / `eastus2` | **before** deploying infra: open Foundry portal → Models + endpoints → check quota for gpt-4o-mini in the chosen region; if 0, submit quota increase request early, or switch region/model to one with default quota |
 | Responsible AI terms | required once per subscription before creating AI resources | unchanged from 2025 README | — |
 
-**Availability conclusion:** all components are available to students in EU regions; the two real risks are (a) ACA environment creation capacity in westeurope right now, and (b) gpt-4o-mini quota = 0 on student subscriptions. Both are mitigated by making `location` a parameter with documented fallbacks and by adding a pre-flight quota/region check step to the README. If a student's allowed-regions policy excludes all Foundry-capable regions, the fallback is a region-access support request (documented in Microsoft Q&A) — not a different subscription type.
+**Availability conclusion:** all components are available to students in EU regions; the two real risks are (a) ACA environment creation capacity in westeurope right now, and (b) gpt-4o-mini quota = 0 on student subscriptions. Both are mitigated by making `location` a parameter with documented fallbacks and by the **pre-flight checks in 6.5** (section added 2026-11-14). If a student's allowed-regions policy excludes all Foundry-capable regions, the fallback is a region-access support request (documented in Microsoft Q&A) — not a different subscription type.
+
+## 6.5 Pre-flight checks: allowed regions + quotas (scripted, with manual fallback)
+
+**Why:** Azure for Students subscriptions carry an "Allowed resource deployment regions" Azure Policy whose region set **varies per student subscription** (documented examples include `westeurope` for some students, and `eastus, eastus2, australiaeast, westus, westus3, swedencentral, francecentral, uksouth` for others), and model TPM quota per region is 0 for many students. So the region must be **discovered per student before deploying**, not hard-coded.
+
+**Testing limitation (important):** the author has no access to a student subscription, so these checks cannot be end-to-end tested by us. Consequences built into the design: (1) the script must be defensive — never abort the whole run, print a clear MANUAL step whenever a check cannot run; (2) the manual portal instructions below are the **source of truth**, the script is a convenience; (3) the script must behave sanely on a regular subscription with no region policy (report "no restriction found → all regions allowed"); (4) students validate in their own subscription as "Step 0" of the exercise.
+
+### 6.5.1 What is automated — `scripts/preflight.sh` (bash + Azure CLI + jq, runs in the devcontainer)
+
+1. `az login` / `az account set` sanity check.
+2. **Allowed regions (policy):** find the built-in assignment at subscription scope:
+   ```bash
+   SUB=$(az account show --query id -o tsv)
+   az policy assignment list --scope "/subscriptions/$SUB" \
+     --query "[?policyDefinitionId=='/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c'].{name:name,params:properties.parameters}" -o json
+   # then per assignment (parameter name varies: listOfAllowedLocations or allowedLocations):
+   az policy assignment show --name <name> --scope "/subscriptions/$SUB" \
+     --query "parameters.listOfAllowedLocations.value // parameters.allowedLocations.value" -o tsv
+   ```
+   If no assignment exists → print "no region restriction policy found → all regions allowed".
+3. **Service availability per region:**
+   - Flex Consumption regions: `az functionapp list-flexconsumption-locations --query "[].name" -o tsv`
+   - Provider region lists: `az provider show --namespace <NS> --query "resourceTypes[?resourceType=='<RT>'].locations" -o tsv` for `Microsoft.App/containerApps`, `Microsoft.Web/sites`, `Microsoft.CognitiveServices/accounts`, `Microsoft.DocumentDB/databaseAccounts`, `Microsoft.Storage/storageAccounts`, `Microsoft.EventGrid/systemTopics`, `Microsoft.ContainerRegistry/registries`, `Microsoft.OperationalInsights/workspaces`.
+4. **Model quota (gpt-4o-mini TPM) per candidate region:**
+   ```bash
+   az cognitiveservices usage list --location <region> -o json | jq '[.[] | select(.name.value | test("gpt-4o-mini"; "i")) | {name: .name.value, used: .currentValue, limit: .limit}]'
+   ```
+   (requires `Cognitive Services Usages Reader` or `Reader` at subscription scope — students are Owner on their own subscription, so this works). Subscription quota tier: `az rest --method get --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.CognitiveServices/quotaTiers?api-version=2025-10-01-preview"`.
+5. **Compute quota (informational):** `az vm list-usage --location <region> -o table`.
+6. **Output:** the intersection (allowed ∩ Flex ∩ ACA ∩ CognitiveServices ∩ …) as a table, with per-region gpt-4o-mini TPM limit next to each candidate, and a final `RECOMMENDED LOCATION: <region>` line (prefer a region where gpt-4o-mini limit > 0; common working student regions: `swedencentral`, `francecentral`, `eastus2`; `westeurope` only if the policy allows it). If gpt-4o-mini limit is 0 everywhere → print the quota-increase instructions (6.5.2) and exit with a warning, not an error.
+
+### 6.5.2 What is manual — exact student instructions (README "Step 0", source of truth)
+
+1. **Allowed regions:** Azure portal → search `Subscriptions` → select your Azure for Students subscription → left menu **Policies** → **Assignments** → find the assignment whose display name is **"Allowed resource deployment regions"** (or "Allowed locations") → open it → under **Parameters** the `listOfAllowedLocations` value lists the allowed region names. If there is no such assignment, all regions are allowed. (CLI equivalent: the commands in 6.5.1 step 2.)
+2. **Compute quotas:** portal → search `Quotas` → **Quotas** blade → pick region in the filter → review "Total regional vCPUs" etc. (CLI: `az vm list-usage --location <region>`).
+3. **Model quota (gpt-4o-mini TPM per region):** sign in to **https://ai.azure.com** (Foundry portal) → **Management center** → **Quota** → the page lists per-region quota for each model; find `gpt-4o-mini` in your candidate region. Alternative: **Models + endpoints** → **Deploy model** → select gpt-4o-mini → in the region dropdown each region shows available quota. If quota is **0 TPM**: click **Request quota increase** (fill the form; on student subscriptions approval is not guaranteed — this is a known limitation) **or** switch to a region where the Quota page shows > 0 (commonly `swedencentral` / `eastus2`). (CLI equivalent: `az cognitiveservices usage list --location <region>`.)
+4. **Pick the location:** choose one region that appears in **all** of: your allowed-regions policy, the Flex Consumption locations list, the Container Apps provider locations, and has gpt-4o-mini quota > 0. Use it for the single `location` parameter of the whole deployment (one region for everything — avoids egress costs). If ACA environment creation later fails with `AKSCapacityHeavyUsage`, retry the whole deployment in the next recommended region from the script output.
+5. **Verify ACA capacity indirectly:** there is no API to pre-check ACA environment capacity; the failure only appears at environment creation → treat the region fallback loop in (4) as the mechanism.
+
+### 6.5.3 Where this lives in the repo
+
+- `scripts/preflight.sh` (+ `scripts/README.md` explaining each check and its manual equivalent), referenced as **Step 0** in the top-level `README.md`; the devcontainer ships Azure CLI + jq so it runs out of the box.
 
 # Part 7 — Risks & notes
 
@@ -331,6 +377,8 @@ Validated 2026-11-14 against Azure pricing pages, Microsoft Learn and current Mi
 - Soft-deleted Cognitive Services accounts block re-creation with the same name → keep purge instructions.
 - Responsible AI terms must be accepted per subscription before the Foundry resource can be created (student step, unchanged).
 - **Cost**: only ACR Basic is daily-rated ($0.17/day); add the free budget alert at $40 and the cleanup step — see Part 6. If a student leaves resources running all semester, worst case ≈ $20–25, still well below the ~$80 credit.
+- **Pre-flight checks cannot be tested by the instructor** (no student-subscription access): `scripts/preflight.sh` is therefore defensive and the manual portal instructions in `scripts/README.md` are the source of truth; students run Step 0 in their own subscription. Test the script on a regular subscription, where the "no allowed-regions policy" path must report all regions allowed.
+- **Model retirement**: gpt-4o-mini (2024-07-18) has been reported as scheduled for retirement on **2027-01-14** (verify on the official Azure OpenAI deprecations/retirements page during implementation). The model name/version are Bicep parameters (`modelName`/`modelVersion`), so switching to a successor (e.g. a gpt-5.x/gpt-6 model) later requires no code change — only a param change. If the course runs past Jan 2027, update the default param proactively.
 
 # Appendix — Research sources (accessed 2026-11-14)
 
@@ -352,6 +400,13 @@ Validated 2026-11-14 against Azure pricing pages, Microsoft Learn and current Mi
 - ACA westeurope capacity restriction (AKSCapacityHeavyUsage since Feb 2026, still reported Sep–Nov 2026; centralus since 30 Sep 2026): https://learn.microsoft.com/answers/questions/5816808 · https://learn.microsoft.com/answers/questions/5922755 · https://learn.microsoft.com/answers/questions/6025361
 - Flex Consumption supported regions (dynamic list): `az functionapp list-flexconsumption-locations` · https://learn.microsoft.com/azure/azure-functions/flex-consumption-how-to
 - Cost Management budgets (free): `az consumption budget create` · https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets
+
+## Pre-flight check docs (Part 6.5)
+- Allowed-regions policy (built-in def `e56962a6-4747-49cd-b67b-bf8b01975c4c`, param `listOfAllowedLocations`): `az policy assignment list/show --query parameters...` · https://www.azadvertizer.net/azpolicyadvertizer/e56962a6-4747-49cd-b67b-bf8b01975c4c.html · student examples of varying allowed sets: https://learn.microsoft.com/answers/questions/5917559 · https://learn.microsoft.com/answers/questions/5925396 · https://learn.microsoft.com/answers/questions/5916405
+- Model quota per region: `az cognitiveservices usage list --location <region>` (needs Cognitive Services Usages Reader / Reader) · https://learn.microsoft.com/cli/azure/cognitiveservices/usage · subscription quota tier: `az rest --url ".../providers/Microsoft.CognitiveServices/quotaTiers?api-version=2025-10-01-preview"` · quota docs: https://learn.microsoft.com/azure/foundry/openai/quotas-limits · https://learn.microsoft.com/azure/foundry/how-to/quota (portal: ai.azure.com → Management center → Quota)
+- Provider region lists: `az provider show --namespace <NS> --query "resourceTypes[?resourceType=='<RT>'].locations"`
+- Compute quota: `az vm list-usage --location <region>` · portal Quotas blade: https://learn.microsoft.com/azure/quotas/regional-quota-requests
+- Model retirement report (gpt-4o family incl. gpt-4o-mini 2024-07-18, reported shutdown 2027-01-14 — verify on official deprecations page): scriptbyai.com OpenAI rate-limits/deprecation table, Jan 2026 entry
 
 - Foundry SDK quickstart & SDK overview: https://learn.microsoft.com/azure/foundry/quickstarts/get-started-code · https://learn.microsoft.com/azure/foundry/how-to/develop/sdk-overview
 - azure-ai-projects on PyPI (2.11.0): https://pypi.org/project/azure-ai-projects/
