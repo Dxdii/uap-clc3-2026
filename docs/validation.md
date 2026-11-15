@@ -178,3 +178,27 @@ End-to-end log flow confirmed in the LAW after generating traffic (blob upload v
 query): `StorageBlobLogs` 31 rows, `AzureDiagnostics` DOCUMENTDB 23 rows, `AzureMetrics` 207 rows,
 `ContainerAppSystemLogs_CL` 304 rows (pre-existing ACA `appLogsConfiguration` wiring).
 Scratch RG deleted + CS account purged afterwards; subscription clean.
+
+## Student-role dry run of docs/exam-phases.md (2026-11-14, PAYG sub, swedencentral, rg-clc3-vibetest)
+
+The exact phase steps of `docs/exam-phases.md` were performed in order as a "student" (preflight →
+budget → Bicep deploy → portal exploration → CI runs → manual publishes → e2e upload → LAW queries →
+cost check → cleanup). Full chain green: upload 200 (and 401 with wrong token), `AnalyzeImage`
+Succeeded (8.6 s), Cosmos doc `id=test.jpeg` with gpt-5-mini analysis, all three workflows success.
+Findings (all reproduced live):
+
+| # | Finding (verified live) | Fix |
+|---|---|---|
+| E13 | az CLI 2.92: `az consumption budget create` requires `--category`/`--end-date` and rejects `--notifications` | README step 3 now uses `az rest` PUT (api-version 2023-11-01) with the full body incl. notifications |
+| E14 | Phase-split token rotation: a self-generated `uploadToken` in the manual deploy is overwritten by the CI `infra-deploy` run (which passes the `UPLOAD_TOKEN` repo secret) → saved token returns 401 | exam doc Phase 1 now uses the preflight-printed token; Phase 3 documents the `az containerapp secret show` read-back for unexpected 401 |
+| E15 | Core Tools 4.16.1 `--build local` **deletes** a pre-seeded `.python_packages` and re-runs pip without `--platform` → macOS arm64 wheels (cryptography `_rust.abi3.so`) → `invalid ELF header`, **0 functions loaded**; a second publish then skips the rebuild ("already in sync") and redeploys the broken package | README step 5 option A replaced: `rm -rf .python_packages` + `PIP_PLATFORM=manylinux2014_x86_64 PIP_PYTHON_VERSION=3.13 PIP_ABI=cp313 PIP_ONLY_BINARY=:all:` env vars → verified `1 functions loaded`, `AnalyzeImage - [blobTrigger]` |
+| E16 | Manual-only container-app deploy fails without a registry entry (C1) | README step 6 now includes `az containerapp registry set --identity system` before `containerapp update` (CI already did this) |
+| E17 | `StorageBlobLogs` columns are `Uri`/`StatusCode`/`CallerIpAddress` — the documented `Uri_s`/`StatusCode_d`/`CallerIpAddress_s` fail with SEM0100 | README step 7 KQL corrected |
+| E18 | Event Grid system topic enables only `DeliveryFailures` → successful deliveries never appear in LAW; account-level Foundry `AzureOpenAIRequestUsage` emits nothing for project-endpoint calls (project resource supports only Audit/Trace/AllMetrics) → token usage must be read in ai.azure.com → Monitoring | README step 7 KQL annotated accordingly; exam doc Phase 3 updated |
+| E19 | Running a manual `func publish` while the CI `function-deploy` run is in flight → `409 DeploymentConflictException` ("on-going deployment") | exam doc Phase 2 now says to wait for each workflow run before the manual step |
+| E20 | Cost Management data lags ~24 h — a fresh RG shows $0 "today" | exam doc Phase 3 cost step notes the lag |
+| E21 | `az role assignment list --resource-group <rg>` shows only RG-scope assignments; the managed-identity ones are on the individual resources (Portal IAM blade shows all); role displays as "Foundry User" | exam doc answer key updated |
+
+Cleanup after the dry run: `az group delete` (RG gone), CS account purged, repo secrets
+(`AZURE_CLI_TOKENS`, `UPLOAD_TOKEN`) + variables removed from the repo, test budget deleted.
+Subscription clean.

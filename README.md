@@ -93,10 +93,12 @@ instructions are in [`scripts/README.md`](scripts/README.md):
 ### Set a budget alert (free) — before deploying anything
 
 ```bash
-az consumption budget create \
-  --budget-name clc3-budget --amount 40 --time-grain Monthly \
-  --start-date $(date +%Y-%m-01) \
-  --notifications '{"Alert80":{"enabled":true,"operator":"GreaterThan","threshold":80,"contactEmails":["<your-student-email>"]}}'
+# az CLI >= 2.8x: 'az consumption budget create' now requires --category/--end-date and no
+# longer accepts --notifications — use the REST form (or Portal -> Cost Management -> Budgets):
+SUB=$(az account show --query id -o tsv)
+az rest --method PUT \
+  --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Consumption/budgets/clc3-budget?api-version=2023-11-01" \
+  --body "{\"properties\":{\"category\":\"cost\",\"amount\":40,\"timeGrain\":\"monthly\",\"timePeriod\":{\"startDate\":\"$(date +%Y-%m-01)\",\"endDate\":\"$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d '+1 year' +%Y-%m-%d)\"},\"notifications\":{\"Alert80\":{\"enabled\":true,\"operator\":\"GreaterThan\",\"threshold\":80,\"contactEmails\":[\"<your-student-email>\"]}}}}"
 ```
 
 ### Accept the Responsible AI terms (once per subscription)
@@ -155,20 +157,22 @@ func azure functionapp publish <functionAppName from step 4 outputs> --build loc
 Flex Consumption has **no remote build**, hence `--build local`. Then check the portal: resource group →
 function app → **Functions** → you should see `AnalyzeImage` (trigger: Blob, enabled).
 
-> **macOS gotcha (Apple Silicon):** `func ... publish --build local` runs `pip download` *without* a
-> `--platform` flag, so on macOS it packages **macOS wheels** into `.python_packages`. The Linux host
-> then fails with `invalid ELF header` and loads **0 functions**. Fix: pre-build the packages for
-> Linux and let `func` skip its own restore, or build inside a Linux container:
+> **macOS gotcha (Apple Silicon, verified with Core Tools 4.16.1):** `func ... publish --build local`
+> deletes any pre-seeded `.python_packages` and re-runs pip *without* a `--platform` flag, so on macOS
+> it packages **macOS wheels**. The Linux host then fails with `invalid ELF header` (e.g.
+> `cryptography/.../_rust.abi3.so`) and loads **0 functions**. Fix: remove the directory and force
+> pip to resolve Linux wheels via env vars (pip maps them to `--platform`/`--python-version`/`--abi`/
+> `--only-binary`), or build inside a Linux container:
 > ```bash
-> # option A — pre-build Linux wheels (func will then say ".python_packages already in sync")
-> rm -rf .python_packages && mkdir -p .python_packages/lib/site-packages
-> pip install --platform manylinux2014_x86_64 --python-version 3.13 --abi cp313 \
->   --only-binary=:all: --target .python_packages/lib/site-packages -r requirements.txt
-> func azure functionapp publish <app> --build local
+> # option A — make func's own pip resolve manylinux wheels (verified: "1 functions loaded")
+> rm -rf .python_packages
+> PIP_PLATFORM=manylinux2014_x86_64 PIP_PYTHON_VERSION=3.13 PIP_ABI=cp313 PIP_ONLY_BINARY=:all: \
+>   func azure functionapp publish <app> --build local
 > # option B — run func inside a Linux container (needs your az login + func inside the image)
 > ```
-> Also match the local Python **minor version** to the app (3.13) — a 3.14 local build against a
-> 3.13 app only warns, but the ELF issue above is the real breaker.
+> Also match the local Python **minor version** to the app (3.13). Check the result in the portal
+> (function app → Functions → `AnalyzeImage`) or in Log Analytics: `AppTraces | where Message
+> contains "functions loaded"` must show **1**, not `invalid ELF header`.
 
 **Create the Event Grid subscription (after the code is published!)** — the blob trigger uses the
 Event Grid source, and its endpoint is the *blob extension webhook*, validated against the published
@@ -209,6 +213,10 @@ TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
 echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
 docker build --platform linux/amd64 -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
 docker push "$SERVER/upload-app:latest"
+# the Bicep template deliberately has no ACR registry entry on the container app (AcrPull is
+# only assigned after the app exists — declaring it in Bicep deadlocks). Add it once manually:
+az containerapp registry set --name <containerAppName> --resource-group rg-clc3-<your-lastname> \
+  --server "$SERVER" --identity system
 az containerapp update --name <containerAppName> --resource-group rg-clc3-<your-lastname> \
   --image "$SERVER/upload-app:latest"
 ```
@@ -264,10 +272,12 @@ AppTraces | where Message contains "AnalyzeImage" | order by TimeGenerated desc 
 // blobServices/default -> resource-specific StorageBlobLogs table)
 StorageBlobLogs
 | where OperationName in ("PutBlob", "PutBlock", "PutBlockList")
-| project TimeGenerated, OperationName, Uri_s, StatusCode_d, CallerIpAddress_s
+| project TimeGenerated, OperationName, Uri, StatusCode, CallerIpAddress
 | order by TimeGenerated desc | take 20
 
-// AI token usage per call (Foundry account diagnostic setting, no payloads)
+// AI token usage per call: visible in ai.azure.com -> project -> Monitoring. The account-level
+// 'AzureOpenAIRequestUsage' diagnostic category does NOT emit rows for project-endpoint calls
+// (verified live), so the query below stays empty — use the portal instead.
 AzureDiagnostics
 | where ResourceProvider == "MICROSOFT.COGNITIVESERVICES" and Category == "AzureOpenAIRequestUsage"
 | project TimeGenerated, OperationName, tokenCount_d = tolong(properties_s.tokenCount)
@@ -279,7 +289,9 @@ AzureDiagnostics
 | project TimeGenerated, OperationName, requestResourceType_s, statusCode_s, requestCharge_s
 | order by TimeGenerated desc | take 20
 
-// Event Grid deliveries to the function webhook
+// Event Grid: the system topic enables only 'DeliveryFailures', so this query shows failures
+// only. A SUCCESSFUL BlobCreated delivery is visible via the function instead:
+//   AppTraces | where Message contains "New blob detected(EventGrid)"
 AzureDiagnostics
 | where ResourceProvider == "MICROSOFT.EVENTGRID" | order by TimeGenerated desc | take 20
 ```
