@@ -208,6 +208,7 @@ module diagnostics 'modules/diagnostics.bicep' = {
     cosmosAccountName: cosmos.outputs.accountName
     acrName: containerApp.outputs.acrName
     foundryAccountName: foundry.outputs.accountName
+    foundryProjectName: foundry.outputs.projectName
     functionAppName: functionApp.outputs.name
   }
 }
