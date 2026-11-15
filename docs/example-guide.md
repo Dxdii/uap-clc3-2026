@@ -418,17 +418,18 @@ Start here if a step fails or behaves unexpectedly. The authoritative, live-veri
 
 The issues students hit most often in the dry run:
 
-| Symptom | Where |
-|---|---|
-| Deployment fails on role assignments (AAD propagation) → re-run the identical command; fails midway (e.g. `AKSCapacityHeavyUsage`) → delete the RG, fresh rgName + deployment name, next candidate region | validation.md, [README step 4](../README.md#4-deploy-the-infrastructure) |
-| Upload returns 401 although you used the preflight token → a CI infra redeploy rotated it to the `UPLOAD_TOKEN` secret; read the current token with `az containerapp secret show … --secret-name upload-token` and retry | validation.md E14 |
-| Function app shows 0 functions / `invalid ELF header` after publish on macOS → use the `rm -rf .python_packages` + `PIP_PLATFORM=…` command in Phase 2 step 3; check `AppTraces` for `1 functions loaded` | validation.md E15 |
-| `az containerapp update --image <acr>…` fails with no registry credentials on a manual deploy → run `az containerapp registry set --identity system` first (Phase 2 step 5) | validation.md C1/E16 |
-| Manual `func publish` while the CI `function-deploy` run is in flight → `409 DeploymentConflictException` → wait for the workflow to finish, then re-run | validation.md E19 |
-| KQL errors (SEM0100) on `StorageBlobLogs` → columns are `Uri`/`StatusCode`/`CallerIpAddress` (no `_s`/`_d` suffixes) | validation.md E17 |
-| Event Grid "delivery" query returns nothing on success → the system topic logs only `DeliveryFailures`; successful delivery is visible via `AppTraces` "New blob detected(EventGrid)" | validation.md E18 |
-| Foundry token usage not in `AzureDiagnostics` → COG log categories don't emit for project-endpoint calls; use the `AzureMetrics` query in Phase 3 step 2 or ai.azure.com → Monitoring | validation.md E18/E22 |
-| Cost analysis shows $0 for a fresh resource group → cost data lags ~24 h; check the last 7 days | validation.md E20 |
-| `az consumption budget create` rejects `--notifications` / misses required args on newer az CLI → use the `az rest` command in Phase 1 step 5 (or the Portal) | validation.md E13 |
-| Preflight check can't run automatically → the script prints the manual Portal/CLI step; authoritative list in `scripts/README.md` | `scripts/README.md` |
-| Anything else: [README step 10](../README.md#10-troubleshooting), `docs/validation.md`, or ask the lecturer | — |
+| Symptom | Solution | Details |
+|---|---|---|
+| Deployment fails on **role assignments** (`RoleAssignmentExists` / AAD propagation) | Re-run the **identical** `az deployment sub create` command — propagation usually completes on retry | [README step 4](../README.md#4-deploy-the-infrastructure), validation.md |
+| Deployment fails **midway** (e.g. `AKSCapacityHeavyUsage` on the Container Apps env) | `az group delete --name <rg> --yes`, then re-run with a **fresh rgName + new deployment name** (`--name clc3-2026-r2`) in the next candidate region from preflight | [README step 4](../README.md#4-deploy-the-infrastructure), validation.md |
+| Upload returns **401** although you used the preflight token (a CI `infra-deploy` run rotated it to the `UPLOAD_TOKEN` secret) | Read the current token and retry: `az containerapp secret show --name <containerAppName> --resource-group <rg> --secret-name upload-token --query value -o tsv` | validation.md E14 |
+| Function app shows **0 functions** / `invalid ELF header` after publish on macOS | Use the exact command in Phase 2 step 3 (`rm -rf .python_packages` + `PIP_PLATFORM=manylinux2014_x86_64 PIP_PYTHON_VERSION=3.13 PIP_ABI=cp313 PIP_ONLY_BINARY=:all:`), then confirm `1 functions loaded` in `AppTraces` | validation.md E15 |
+| `az containerapp update --image <acr>…` fails (no registry credentials) on a manual deploy | Run `az containerapp registry set --name <containerAppName> --resource-group <rg> --server <acrLoginServer> --identity system` first, then `update` (Phase 2 step 5) | validation.md C1/E16 |
+| Manual `func publish` while the CI `function-deploy` run is in flight → `409 DeploymentConflictException` | Wait for the workflow run to finish, then re-run your manual publish (or vice versa) | validation.md E19 |
+| KQL error **SEM0100** on `StorageBlobLogs` | The columns are `Uri`, `StatusCode`, `CallerIpAddress` — **not** `Uri_s`/`StatusCode_d`/`CallerIpAddress_s` | validation.md E17 |
+| Event Grid query returns **nothing on success** | Expected: the system topic logs only `DeliveryFailures`. A successful delivery is visible via `AppTraces \| where Message contains "New blob detected(EventGrid)"` | validation.md E18 |
+| Foundry token usage missing in `AzureDiagnostics` | Expected for project-endpoint calls: use the `AzureMetrics` query in Phase 3 step 2 (`ResourceProvider =~ "MICROSOFT.COGNITIVESERVICES"`) or ai.azure.com → project → **Monitoring** | validation.md E18/E22 |
+| Cost analysis shows **$0** for a fresh resource group | Cost data lags ~24 h — switch Cost analysis to the **last 7 days**, or check again tomorrow | validation.md E20 |
+| `az consumption budget create` rejects `--notifications` / requires `--category`/`--end-date` (newer az CLI) | Use the `az rest` command in Phase 1 step 5, or Portal → Cost Management → Budgets → Add | validation.md E13 |
+| A **preflight** check can't run automatically | The script prints the equivalent manual step (Portal/CLI); authoritative list: [`scripts/README.md`](../scripts/README.md) | `scripts/README.md` |
+| Anything else | [README step 10 "Troubleshooting"](../README.md#10-troubleshooting) → [docs/validation.md](validation.md) (E1–E22, C1–C3) → ask the lecturer | — |
