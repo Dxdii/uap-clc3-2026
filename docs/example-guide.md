@@ -89,7 +89,7 @@ your own private fork, practicing the lecture concepts.
 
 # Phase 2 — Ship it: CI/CD + Foundry model (~60 min)
 
-**Concepts:** 4, 5, 1. **Deliverable:** function + container app code deployed (manual path *and* via GitHub Actions); Foundry model inspected in the portal.
+**Concepts:** 4, 5, 1. **Deliverable:** function + container app deployed via the GitHub Actions workflows; Foundry model inspected in the portal. (The manual commands in the blue info boxes are **optional** — they show the same deployments without CI.)
 
 ## Exact steps
 
@@ -100,39 +100,52 @@ your own private fork, practicing the lecture concepts.
    (Alternative trigger: push a change to `main` — e.g. add a `// ci trigger` comment line to `infrastructure/main.bicep` and push. `infra-deploy` fires on `infrastructure/**` changes, `containerapp-deploy` on `src/upload-app/**`, `function-deploy` on `src/image-analysis-function/**`.)
 
    **You already deployed the infrastructure manually in Phase 1 — that is fine, do not delete anything:** the CI `infra-deploy` run is an *incremental* update of the same subscription-level deployment (same template, same parameters), so it creates **no new resources** — it just re-applies the existing ones. It also re-applies the same `UPLOAD_TOKEN` (the preflight secret you used in Phase 1), so your saved token keeps working, and if an app image was already pushed to your ACR it keeps that image instead of resetting the container app to the placeholder.
-3. **Manual function deploy** ([README step 5](../README.md#5-deploy-the-function-flex-consumption--python)) — do this too, to compare with CI:
-   ```bash
-   cd src/image-analysis-function
-   pip install -r requirements.txt
-   rm -rf .python_packages
-   PIP_PLATFORM=manylinux2014_x86_64 PIP_PYTHON_VERSION=3.13 PIP_ABI=cp313 PIP_ONLY_BINARY=:all: \
-     func azure functionapp publish <functionAppName> --build local
-   ```
-   (On Linux/Windows the `PIP_*` env vars and `rm -rf` are harmless no-ops in effect — the command works everywhere.)
-   Verify: the `func` output lists `AnalyzeImage - [blobTrigger]`; Portal → function app → **Functions** → `AnalyzeImage` present (trigger: Blob, enabled).
-4. **Event Grid subscription** ([README step 5](../README.md#5-deploy-the-function-flex-consumption--python) — after the publish):
-   ```bash
-   SUB=$(az account show --query id -o tsv); RG=rg-clc3-<your-lastname>
-   APP=<functionAppName>; ST=<storageAccountName>
-   HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)
-   BLOBS_KEY=$(az rest --method POST --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" --query systemKeys.blobs_extension -o tsv)
-   az eventgrid event-subscription create \
-     --source-resource-id "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$ST" \
-     --name "sub-$APP-AnalyzeImage" --endpoint-type webhook \
-     --endpoint "https://$HOST/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY" \
-     --included-event-types Microsoft.Storage.BlobCreated \
-     --subject-begins-with "/blobServices/default/containers/imageanalysis/blobs/"
-   ```
-5. **Manual container app deploy** ([README step 6](../README.md#6-deploy-the-upload-container-app)):
-   ```bash
-   ACR=<acrName>; SERVER=<acrLoginServer>
-   TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
-   echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
-   docker build --platform linux/amd64 -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
-   docker push "$SERVER/upload-app:latest"
-   az containerapp registry set --name <containerAppName> --resource-group $RG --server "$SERVER" --identity system
-   az containerapp update --name <containerAppName> --resource-group $RG --image "$SERVER/upload-app:latest"
-   ```
+
+   After `containerapp-deploy` and `function-deploy` succeed, the function (`AnalyzeImage`) and the upload app are live — **steps 3–5 below are optional manual equivalents**, shown so you can see and compare what the workflows do.
+
+3. > [!NOTE]
+   > **Optional — manual function deploy** (not required: the `function-deploy` workflow already published the function). Run this to see the same deployment done from your machine without CI ([README step 5](../README.md#5-deploy-the-function-flex-consumption--python)):
+   >
+   > ```bash
+   > cd src/image-analysis-function
+   > pip install -r requirements.txt
+   > rm -rf .python_packages
+   > PIP_PLATFORM=manylinux2014_x86_64 PIP_PYTHON_VERSION=3.13 PIP_ABI=cp313 PIP_ONLY_BINARY=:all: \
+   >   func azure functionapp publish <functionAppName> --build local
+   > ```
+   >
+   > (On Linux/Windows the `PIP_*` env vars and `rm -rf` are harmless no-ops in effect — the command works everywhere.)
+   > Verify: the `func` output lists `AnalyzeImage - [blobTrigger]`; Portal → function app → **Functions** → `AnalyzeImage` present (trigger: Blob, enabled).
+
+4. > [!NOTE]
+   > **Optional — manual Event Grid subscription** (not required: `function-deploy` already creates/updates it). Needed only if you published the function purely by hand (step 3) and no CI run did it — the webhook endpoint is validated against the published function, so this must come after a publish:
+   >
+   > ```bash
+   > SUB=$(az account show --query id -o tsv); RG=rg-clc3-<your-lastname>
+   > APP=<functionAppName>; ST=<storageAccountName>
+   > HOST=$(az functionapp show --name "$APP" --resource-group "$RG" --query properties.defaultHostName -o tsv)
+   > BLOBS_KEY=$(az rest --method POST --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP/host/default/listkeys?api-version=2024-11-01" --query systemKeys.blobs_extension -o tsv)
+   > az eventgrid event-subscription create \
+   >   --source-resource-id "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$ST" \
+   >   --name "sub-$APP-AnalyzeImage" --endpoint-type webhook \
+   >   --endpoint "https://$HOST/runtime/webhooks/blobs?functionName=Host.Functions.AnalyzeImage&code=$BLOBS_KEY" \
+   >   --included-event-types Microsoft.Storage.BlobCreated \
+   >   --subject-begins-with "/blobServices/default/containers/imageanalysis/blobs/"
+   > ```
+
+5. > [!NOTE]
+   > **Optional — manual container app deploy** (not required: the `containerapp-deploy` workflow already built the image on the runner, pushed it to your ACR, ran `registry set`, and updated the app). Run this to see the runner-side build done locally on your machine ([README step 6](../README.md#6-deploy-the-upload-container-app)):
+   >
+   > ```bash
+   > ACR=<acrName>; SERVER=<acrLoginServer>
+   > TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
+   > echo "$TOKEN" | docker login "$SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
+   > docker build --platform linux/amd64 -t "$SERVER/upload-app:latest" -f src/upload-app/Dockerfile src/upload-app
+   > docker push "$SERVER/upload-app:latest"
+   > az containerapp registry set --name <containerAppName> --resource-group $RG --server "$SERVER" --identity system
+   > az containerapp update --name <containerAppName> --resource-group $RG --image "$SERVER/upload-app:latest"
+   > ```
+
 6. **Foundry in the Portal** (ai.azure.com): project `clc3-project` → **Playground** → send `test.jpeg`, inspect the request/response JSON (inputs/outputs); **Model catalog** → deployed model: name, version `2025-08-07`, SKU, capacity, TPM quota; **Monitoring**: requests, latency, tokens.
 
 ## Questions to answer (Phase 2)
