@@ -94,7 +94,12 @@ your own private fork, practicing the lecture concepts.
 ## Exact steps
 
 1. **Wire the fork for CI**: re-run `bash scripts/preflight.sh` (step 6 pushes the repo secret + variables via `gh`). Verify: your fork → Settings → Secrets and variables → Actions.
-2. **Trigger CI**: push any change under `infrastructure/**` to `main` (or *Actions → infra-deploy → Run workflow*). Then run **containerapp-deploy** and **function-deploy** the same way — and **wait for each run to finish** before continuing. While they run, read the three workflow files in `.github/workflows/`.
+2. **Trigger CI** — no code change needed; use the **Run workflow** button for each workflow on `main`:
+   repo → **Actions** → select the workflow → **Run workflow** dropdown → Branch: `main` → **Run workflow**.
+   Do this for `infra-deploy`, then `containerapp-deploy`, then `function-deploy` — and **wait for each run to finish** before starting the next (and before the manual steps below). While they run, read the three workflow files in `.github/workflows/`.
+   (Alternative trigger: push a change to `main` — e.g. add a `// ci trigger` comment line to `infrastructure/main.bicep` and push. `infra-deploy` fires on `infrastructure/**` changes, `containerapp-deploy` on `src/upload-app/**`, `function-deploy` on `src/image-analysis-function/**`.)
+
+   **You already deployed the infrastructure manually in Phase 1 — that is fine, do not delete anything:** the CI `infra-deploy` run is an *incremental* update of the same subscription-level deployment (same template, same parameters), so it creates **no new resources** — it just re-applies the existing ones. It also re-applies the same `UPLOAD_TOKEN` (the preflight secret you used in Phase 1), so your saved token keeps working, and if an app image was already pushed to your ACR it keeps that image instead of resetting the container app to the placeholder.
 3. **Manual function deploy** (README step 5) — do this too, to compare with CI:
    ```bash
    cd src/image-analysis-function
