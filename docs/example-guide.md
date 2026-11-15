@@ -4,9 +4,7 @@
 You deploy the reference architecture step by step in your own Azure for Students subscription and
 your own private fork, practicing the lecture concepts.
 
-**Diagrams:** [architecture](diagrams/architecture.mermaid) ·
-[infrastructure/Bicep](diagrams/infrastructure.mermaid) ·
-[CI/CD](diagrams/cicd.mermaid) · [observability](diagrams/observability.mermaid)
+**Diagrams:** rendered inline below and at each phase (raw sources: [architecture](diagrams/architecture.mermaid) · [infrastructure](diagrams/infrastructure.mermaid) · [CI/CD](diagrams/cicd.mermaid) · [observability](diagrams/observability.mermaid)) — see **Architecture overview**.
 
 ## Concepts covered (learning objectives → phase)
 
@@ -30,9 +28,106 @@ your own private fork, practicing the lecture concepts.
 
 ---
 
+# Architecture overview
+
+## Scenario / use case
+
+You build a small **image-analysis pipeline**: a student uploads a photo (e.g. `test.jpeg`) to a
+web app, the image lands in blob storage, an event notifies a serverless function, the function asks
+a **Foundry vision-language model** (`gpt-5-mini`) to describe the image, and the resulting JSON is
+stored in Cosmos DB — all deployed from your private GitHub fork, observable in one Log Analytics
+workspace, and cheap (the only fixed cost is ACR Basic at ~$0.17/day; everything else is free at this
+scale on Azure for Students).
+
+## Target architecture
+
+The request flow end to end (numbers = call order):
+
+```mermaid
+%% End-to-end architecture and request flow of the exercise pipeline.
+%% Rendered by GitHub when this file is opened; linked from README.md.
+flowchart LR
+  user(["Student: curl / Postman / browser form"])
+
+  subgraph rg["Azure resource group (single region, from preflight)"]
+    ca["Container App ca-upload-*<br/>FastAPI upload endpoint, port 8080<br/>scale-to-zero, system identity"]
+    acr["ACR acr-* (Basic)<br/>image: upload-app"]
+    st["Storage st-* (GPv2)<br/>container 'imageanalysis'"]
+    eg["Event Grid system topic systopic-*<br/>BlobCreated events"]
+    fn["Function App func-* (Flex Consumption, Python 3.13)<br/>AnalyzeImage: blob input binding"]
+    foundry["Foundry ais-* + project clc3-project<br/>model deployment gpt-5-mini"]
+    cosmos["Cosmos DB cosmos-* (serverless)<br/>ImageAnalysis / results"]
+  end
+
+  user -->|"1. POST /upload + X-Upload-Token"| ca
+  acr -->|"image pull (AcrPull on app identity)"| ca
+  ca -->|"2. PUT blob<br/>(Storage Blob Data Contributor)"| st
+  st -->|"3. BlobCreated event"| eg
+  eg -->|"4. webhook /runtime/webhooks/blobs"| fn
+  fn -->|"5. read blob (input binding)"| st
+  fn -->|"6. Foundry SDK call, Entra ID (Azure AI User)"| foundry
+  fn -->|"7. JSON result via Cosmos output binding<br/>(Cosmos DB Built-in Data Contributor)"| cosmos
+```
+
+## Services involved and their role
+
+| Service | Resource (name pattern) | Role in the pipeline |
+|---|---|---|
+| **Container Apps** | app `ca-upload-*` in env `cae-*` | Public HTTPS upload endpoint `POST /upload` (token-protected), scale-to-zero; writes the uploaded file to storage |
+| **Azure Container Registry** | `acr-*` (Basic SKU) | Stores the `upload-app` Docker image; the app pulls it via its system identity (AcrPull) |
+| **Storage (GPv2)** | `st-*`, container `imageanalysis` | Landing zone for uploaded images; emits `BlobCreated` events |
+| **Event Grid** (system topic) | `systopic-*` | Routes `BlobCreated` events to the function's blob webhook |
+| **Function App** (Flex Consumption, Python 3.13) | `func-*` | `AnalyzeImage` (blob trigger): reads the blob, calls the model via the Foundry SDK with managed identity, writes the result via Cosmos output binding |
+| **Azure AI Foundry** | account `ais-*`, project `clc3-project`, deployment `gpt-5-mini` | Vision-language model (version `2025-08-07`, `GlobalStandard`) that returns the image analysis as JSON |
+| **Cosmos DB** (serverless) | `cosmos-*`, db `ImageAnalysis`, container `results` (pk `/filename`) | Stores one analysis document per image (`id` = file name) |
+| **Log Analytics + App Insights** | `log-*`, `appi-*` | Central logs/metrics/traces for all resources (Phase 3) |
+| **GitHub** (your private fork + Actions) | fork of this repo | Source code and the three CI/CD workflows that deploy infra, function and container app with your az CLI token |
+
+All Azure resources live in **one resource group in one region** (the `RECOMMENDED LOCATION` from
+preflight), deployed by a single subscription-scope Bicep deployment. Access between services is
+**identity-based (RBAC), no keys** — except the LAW workspace and Cosmos keep local auth enabled so
+the Portal (Data Explorer, workspace shared key) works for you.
+
+---
+
 # Phase 1 — Foundation: IaC (Bicep) + Portal exploration (~60 min)
 
 **Concepts:** 1, 2, 3. **Deliverable:** infrastructure deployed once via Bicep/CLI; every resource opened and understood in the Portal.
+
+**Phase 1 diagram — what the Bicep deployment creates** (raw: [infrastructure.mermaid](diagrams/infrastructure.mermaid)):
+
+```mermaid
+%% Infrastructure-as-code structure: one subscription-scope Bicep deployment
+%% creates one resource group with all modules.
+%% Rendered by GitHub when this file is opened; linked from docs/implementation-plan.md.
+flowchart TB
+  main["infrastructure/main.bicep<br/>deployment at subscription scope"]
+
+  main --> rg["modules/resourcegroup.bicep"]
+
+  subgraph rgscope["resource group (rgName, one region)"]
+    mon["monitoring.bicep<br/>Log Analytics workspace + App Insights (workspace-based)"]
+    sto["storage.bicep<br/>GPv2 storage + 'imageanalysis' container<br/>+ Event Grid system topic"]
+    fnd["foundry.bicep<br/>AIServices account + project + gpt-5-mini deployment"]
+    cos["cosmosdb.bicep<br/>serverless Cosmos DB: ImageAnalysis/results"]
+    fnm["function.bicep<br/>Flex Consumption plan + function app (system identity)"]
+    cam["containerapp.bicep<br/>ACA env (LA-backed) + ACR (Basic) + upload app"]
+    rbac["rbac.bicep + cosmosdb-rbac.bicep<br/>role assignments (managed identities only)"]
+    diag["diagnostics.bicep<br/>diagnostic settings -> LA workspace"]
+  end
+
+  main --> mon
+  main --> sto
+  main --> fnd
+  main --> cos
+  main --> fnm
+  main --> cam
+  main --> rbac
+  main --> diag
+  rbac -.->|"needs principalIds"| fnm
+  rbac -.-> cam
+  diag -.->|"needs resources + workspace"| mon
+```
 
 ## Exact steps
 
@@ -90,6 +185,48 @@ your own private fork, practicing the lecture concepts.
 # Phase 2 — Ship it: CI/CD + Foundry model (~60 min)
 
 **Concepts:** 4, 5, 1. **Deliverable:** function + container app deployed via the GitHub Actions workflows; Foundry model inspected in the portal. (The manual commands in the blue info boxes are **optional** — they show the same deployments without CI.)
+
+**Phase 2 diagram — how your fork gets wired and how the CI workflows deploy** (raw: [cicd.mermaid](diagrams/cicd.mermaid)):
+
+```mermaid
+%% CI/CD flow: how a student fork gets wired and how the three workflows deploy.
+%% Auth = the student's az CLI token store as repo secret (no service principal —
+%% app registration is disabled in the FH OOe tenant).
+%% Rendered by GitHub when this file is opened; linked from README.md.
+flowchart LR
+  subgraph local["Student machine"]
+    azlogin["az login<br/>(token store in ~/.azure)"]
+    preflight["scripts/preflight.sh<br/>region/quota checks + step 6 gh wiring"]
+  end
+
+  subgraph gh["GitHub fork (must stay private)"]
+    secret["Secret AZURE_CLI_TOKENS<br/>+ UPLOAD_TOKEN"]
+    vars["Variables AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID,<br/>RESOURCE_GROUP, LOCATION, DEPLOYMENT_NAME"]
+    push(["push to main / workflow_dispatch"])
+  end
+
+  subgraph actions["GitHub Actions (ubuntu-latest)"]
+    login["Login step: decode AZURE_CLI_TOKENS<br/>into $HOME/.azure, az account set"]
+    infra["infra-deploy.yml<br/>az deployment sub create (Bicep, subscription scope)"]
+    caDeploy["containerapp-deploy.yml<br/>docker build + push to ACR (runner-side),<br/>az containerapp registry set + update"]
+    fnDeploy["function-deploy.yml<br/>func publish --python --build local,<br/>Event Grid webhook subscription"]
+  end
+
+  subgraph azure["Azure subscription (student's own)"]
+    resources["resource group rg-clc3-*<br/>+ all exercise resources"]
+  end
+
+  azlogin --> preflight
+  preflight -->|"gh secret set / gh variable set"| secret
+  preflight --> vars
+  push --> login
+  login --> infra
+  infra --> resources
+  infra -->|"resource names read back via<br/>az deployment sub show outputs"| caDeploy
+  infra --> fnDeploy
+  caDeploy --> resources
+  fnDeploy --> resources
+```
 
 ## Exact steps
 
@@ -164,6 +301,39 @@ your own private fork, practicing the lecture concepts.
 # Phase 3 — Operate it: e2e test, observability, cost, cleanup (~60 min)
 
 **Concepts:** 6, 3, 5. **Deliverable:** one successful upload → analysis → Cosmos document, all hops traced in logs/metrics; deliberate error found; costs understood; everything deleted.
+
+**Phase 3 diagram — where logs and metrics of every resource go** (raw: [observability.mermaid](diagrams/observability.mermaid)):
+
+```mermaid
+%% Observability: every resource ships logs/metrics to the Log Analytics
+%% workspace (or emits platform metrics to Azure Monitor automatically).
+%% Rendered by GitHub when this file is opened; linked from README.md.
+flowchart LR
+  subgraph resources["Exercise resources (rg-clc3-*)"]
+    aca["Container Apps env<br/>appLogsConfiguration -> log-analytics<br/>(ContainerAppConsoleLogs / SystemLogs / HTTPLogs)"]
+    fnapp["Function App<br/>App Insights (workspace-based, AAD) -> AppTraces/AppRequests<br/>+ diagnostic setting: FunctionAppLogs"]
+    st["Storage account<br/>account metrics + blobServices/default child:<br/>StorageRead/Write/Delete -> StorageBlobLogs"]
+    cosmos["Cosmos DB<br/>DataPlaneRequests, QueryRuntimeStatistics,<br/>PartitionKeyStatistics/RUConsumption, ControlPlaneRequests"]
+    acr["ACR<br/>ContainerRegistryLoginEvents / RepositoryEvents"]
+    eg["Event Grid system topic<br/>DeliveryFailures"]
+    cs["Foundry account<br/>Audit, Trace, AzureOpenAIRequestUsage<br/>(RequestResponse off: logs base64 image payloads)"]
+  end
+
+  law["Log Analytics workspace log-*<br/>PerGB2018, 30-day retention, first 5 GB/month free"]
+  am["Azure Monitor<br/>platform metrics automatic for all resources"]
+
+  aca --> law
+  fnapp --> law
+  st -->|"diagnostic settings"| law
+  cosmos -->|"diagnostic settings"| law
+  acr -->|"diagnostic settings"| law
+  eg -->|"diagnostic settings"| law
+  cs -->|"diagnostic settings"| law
+  resources -->|"platform metrics"| am
+
+  law --> portal(["Explore: portal -> LAW Logs (KQL)<br/>or Azure Monitor -> Metrics / App Insights"])
+  am --> portal
+```
 
 ## Exact steps
 
