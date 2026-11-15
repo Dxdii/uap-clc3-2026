@@ -1,13 +1,14 @@
-# Practical Exam — 3-Phase Deployment Plan (uap-clc3-2026)
+# Student Guide — Self-Paced Walkthrough in 3 Phases (uap-clc3-2026)
 
-**Format:** ~3 hours, individual work. Students deploy the reference architecture step by step in
-their own Azure for Students subscription and own private fork, practicing the lecture concepts.
+**Format:** ~3 hours, self-paced during the practical session (the lecturer is present for questions).
+You deploy the reference architecture step by step in your own Azure for Students subscription and
+your own private fork, practicing the lecture concepts.
 
 **Diagrams:** [architecture](diagrams/architecture.mermaid) ·
 [infrastructure/Bicep](diagrams/infrastructure.mermaid) ·
 [CI/CD](diagrams/cicd.mermaid) · [observability](diagrams/observability.mermaid)
 
-## Concepts covered (exam objectives → phase)
+## Concepts covered (learning objectives → phase)
 
 | # | Concept | Phase |
 |---|---|---|
@@ -193,7 +194,7 @@ their own Azure for Students subscription and own private fork, practicing the l
 
 ---
 
-# Appendix A — Answer key (for the examiner)
+# Appendix A — Answer key (for the lecturer)
 
 - **P1-Q1:** Portal, Cloud Shell, CLI/PowerShell, ARM/Bicep, REST, SDKs, CI (GitHub Actions) — step 8 used CLI+Bicep (ARM engine), which is repeatable/scriptable vs. Portal clicks.
 - **P1-Q2:** deterministic per (subscription, rgName) → no collisions between students in different subscriptions; 16 hex chars because storage/ACR/Cosmos names have length limits and need lowercase alphanumerics.
