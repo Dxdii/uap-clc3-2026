@@ -36,15 +36,15 @@ your own private fork, practicing the lecture concepts.
 
 ## Exact steps
 
-1. **Fork & clone** (README step 1): fork `juergenbr/uap-clc3-2026` on GitHub (keep it **private**), clone it, `cd uap-clc3-2026`.
-2. **Dev container** (README step 2): VS Code → command palette → *Dev Containers: Reopen in Container* (Docker must run). The image has Python 3.13, az CLI, Functions Core Tools, Bicep, jq, gh.
+1. **Fork & clone** ([README step 1](../README.md#1-fork-and-clone)): fork `juergenbr/uap-clc3-2026` on GitHub (keep it **private**), clone it, `cd uap-clc3-2026`.
+2. **Dev container** ([README step 2](../README.md#2-open-in-the-dev-container)): VS Code → command palette → *Dev Containers: Reopen in Container* (Docker must run). The image has Python 3.13, az CLI, Functions Core Tools, Bicep, jq, gh.
 3. **Logins:**
    ```bash
    az login                                   # browser/device-code
    az account set --subscription <your-student-sub-id>
    gh auth login                              # once; needed by preflight step 6
    ```
-4. **Preflight** (README step 3):
+4. **Preflight** ([README step 3](../README.md#3-step-0--pre-flight-checks-mandatory-do-this-first)):
    ```bash
    bash scripts/preflight.sh
    ```
@@ -56,9 +56,9 @@ your own private fork, practicing the lecture concepts.
      --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Consumption/budgets/clc3-budget?api-version=2023-11-01" \
      --body "{\"properties\":{\"category\":\"cost\",\"amount\":40,\"timeGrain\":\"monthly\",\"timePeriod\":{\"startDate\":\"$(date +%Y-%m-01)\",\"endDate\":\"$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d '+1 year' +%Y-%m-%d)\"},\"notifications\":{\"Alert80\":{\"enabled\":true,\"operator\":\"GreaterThan\",\"threshold\":80,\"contactEmails\":[\"<you@students.fhooe.at>\"]}}}}"
    ```
-6. **Responsible AI terms** (once per subscription, README step 3): Portal → Create a resource → *Cognitive Services* → tick *Responsible AI terms* → create in West Europe → delete the resource group again.
+6. **Responsible AI terms** (once per subscription, [README step 3](../README.md#3-step-0--pre-flight-checks-mandatory-do-this-first)): Portal → Create a resource → *Cognitive Services* → tick *Responsible AI terms* → create in West Europe → delete the resource group again.
 7. **Read the IaC before deploying** (15 min): open `infrastructure/main.bicep` and skim `infrastructure/modules/*.bicep`. Identify: params (`rgName`, `location`, `uploadToken`, model params), `var nameSuffix = take(uniqueString(subscription().subscriptionId, rgName), 16)`, the module blocks, module outputs feeding other modules' params, `dependsOn`. See [infrastructure diagram](diagrams/infrastructure.mermaid).
-8. **Deploy via CLI + Bicep** (README step 4). From the repo root, using the **`UPLOAD_TOKEN` printed by preflight step 6**:
+8. **Deploy via CLI + Bicep** ([README step 4](../README.md#4-deploy-the-infrastructure)). From the repo root, using the **`UPLOAD_TOKEN` printed by preflight step 6**:
    ```bash
    az deployment sub create --name clc3-2026 --location $LOC \
      --template-file infrastructure/main.bicep \
@@ -100,7 +100,7 @@ your own private fork, practicing the lecture concepts.
    (Alternative trigger: push a change to `main` — e.g. add a `// ci trigger` comment line to `infrastructure/main.bicep` and push. `infra-deploy` fires on `infrastructure/**` changes, `containerapp-deploy` on `src/upload-app/**`, `function-deploy` on `src/image-analysis-function/**`.)
 
    **You already deployed the infrastructure manually in Phase 1 — that is fine, do not delete anything:** the CI `infra-deploy` run is an *incremental* update of the same subscription-level deployment (same template, same parameters), so it creates **no new resources** — it just re-applies the existing ones. It also re-applies the same `UPLOAD_TOKEN` (the preflight secret you used in Phase 1), so your saved token keeps working, and if an app image was already pushed to your ACR it keeps that image instead of resetting the container app to the placeholder.
-3. **Manual function deploy** (README step 5) — do this too, to compare with CI:
+3. **Manual function deploy** ([README step 5](../README.md#5-deploy-the-function-flex-consumption--python)) — do this too, to compare with CI:
    ```bash
    cd src/image-analysis-function
    pip install -r requirements.txt
@@ -110,7 +110,7 @@ your own private fork, practicing the lecture concepts.
    ```
    (On Linux/Windows the `PIP_*` env vars and `rm -rf` are harmless no-ops in effect — the command works everywhere.)
    Verify: the `func` output lists `AnalyzeImage - [blobTrigger]`; Portal → function app → **Functions** → `AnalyzeImage` present (trigger: Blob, enabled).
-4. **Event Grid subscription** (README step 5 — after the publish):
+4. **Event Grid subscription** ([README step 5](../README.md#5-deploy-the-function-flex-consumption--python) — after the publish):
    ```bash
    SUB=$(az account show --query id -o tsv); RG=rg-clc3-<your-lastname>
    APP=<functionAppName>; ST=<storageAccountName>
@@ -123,7 +123,7 @@ your own private fork, practicing the lecture concepts.
      --included-event-types Microsoft.Storage.BlobCreated \
      --subject-begins-with "/blobServices/default/containers/imageanalysis/blobs/"
    ```
-5. **Manual container app deploy** (README step 6):
+5. **Manual container app deploy** ([README step 6](../README.md#6-deploy-the-upload-container-app)):
    ```bash
    ACR=<acrName>; SERVER=<acrLoginServer>
    TOKEN=$(az acr login --name "$ACR" --expose-token --query accessToken -o tsv)
@@ -154,7 +154,7 @@ your own private fork, practicing the lecture concepts.
 
 ## Exact steps
 
-1. **E2E upload** (README step 7):
+1. **E2E upload** ([README step 7](../README.md#7-test-end-to-end)):
    ```bash
    curl -H "X-Upload-Token: $UPLOAD_TOKEN" -F "file=@test.jpeg" https://<uploadAppFqdn>/upload
    # expect HTTP 200 + JSON {blobName, container, size, message}
@@ -165,7 +165,7 @@ your own private fork, practicing the lecture concepts.
    ```bash
    az containerapp secret show --name <containerAppName> --resource-group <rg> --secret-name upload-token --query value -o tsv
    ```
-2. **Trace every hop in the Log Analytics workspace** (see [observability diagram](diagrams/observability.mermaid)); Portal → LAW `log-*` → **Logs**, using the KQL snippets from README step 7 "Explore observability":
+2. **Trace every hop in the Log Analytics workspace** (see [observability diagram](diagrams/observability.mermaid)); Portal → LAW `log-*` → **Logs**, using the KQL snippets from [README step 7 → "Explore observability"](../README.md#explore-observability-azure-monitor--log-analytics):
    - Container app: `ContainerAppConsoleLogs_CL | where ContainerAppName_s contains "ca-upload"` → the `/upload` **200 and 401**.
    - Function: `AppTraces | where Message contains "AnalyzeImage"` → `New blob detected(EventGrid)` + `Executed 'Functions.AnalyzeImage' (Succeeded)` + duration.
    - Storage: `StorageBlobLogs | where OperationName has "PutBlob"` → `test.jpeg` written.
@@ -174,7 +174,7 @@ your own private fork, practicing the lecture concepts.
    - Metrics: any resource → **Monitor → Metrics** (function executions, ACA requests/CPU, Cosmos RU/s); the same data is in the LAW as `AzureMetrics`.
 3. **Deliberate-error exercise:** using the wrong-token 401 from step 1, find the failure in logs/metrics within 5 minutes and explain the service-communication chain (who called whom, in which order, with which result code).
 4. **Cost check:** Portal → subscription → **Cost analysis**, grouped by resource: ACR Basic is the only fixed cost ($0.17/day); everything else is free at this scale (LAW 5 GB/month free, Cosmos serverless, Flex free grant, scale-to-zero ACA, model ~$0.002/image). Compare with your budget alert.
-5. **Cleanup (mandatory, README step 11):**
+5. **Cleanup (mandatory, [README step 11](../README.md#11-cleanup-do-this-when-you-are-done)):**
    ```bash
    az group delete --name rg-clc3-<your-lastname> --yes --no-wait
    # after it finishes, purge the soft-deleted Cognitive Services account so names can be reused:
@@ -220,9 +220,9 @@ your own private fork, practicing the lecture concepts.
 # Appendix B — Quick reference
 
 - Preflight: `bash scripts/preflight.sh` (manual fallback: `scripts/README.md`)
-- Infra deploy: README step 4 · Function: step 5 · Container app: step 6 · E2E: step 7 · Cleanup: step 11
+- Infra deploy: [README step 4](../README.md#4-deploy-the-infrastructure) · Function: [step 5](../README.md#5-deploy-the-function-flex-consumption--python) · Container app: [step 6](../README.md#6-deploy-the-upload-container-app) · E2E: [step 7](../README.md#7-test-end-to-end) · Cleanup: [step 11](../README.md#11-cleanup-do-this-when-you-are-done)
 - Workflows: `.github/workflows/{infra-deploy,containerapp-deploy,function-deploy}.yml`
-- KQL snippets: README step 7 "Explore observability" · Full pitfall list: `docs/validation.md`
+- KQL snippets: [README step 7 → "Explore observability"](../README.md#explore-observability-azure-monitor--log-analytics) · Full pitfall list: `docs/validation.md`
 
 ---
 
@@ -230,14 +230,14 @@ your own private fork, practicing the lecture concepts.
 
 Start here if a step fails or behaves unexpectedly. The authoritative, live-verified pitfall list
 (symptom → fix) is **[docs/validation.md](validation.md)** — entries E1–E22 and C1–C3, plus
-[README step 10 "Troubleshooting"](../README.md) and the manual preflight fallback
+[README step 10 "Troubleshooting"](../README.md#10-troubleshooting) and the manual preflight fallback
 [`scripts/README.md`](../scripts/README.md).
 
 The issues students hit most often in the dry run:
 
 | Symptom | Where |
 |---|---|
-| Deployment fails on role assignments (AAD propagation) → re-run the identical command; fails midway (e.g. `AKSCapacityHeavyUsage`) → delete the RG, fresh rgName + deployment name, next candidate region | validation.md, README step 4 |
+| Deployment fails on role assignments (AAD propagation) → re-run the identical command; fails midway (e.g. `AKSCapacityHeavyUsage`) → delete the RG, fresh rgName + deployment name, next candidate region | validation.md, [README step 4](../README.md#4-deploy-the-infrastructure) |
 | Upload returns 401 although you used the preflight token → a CI infra redeploy rotated it to the `UPLOAD_TOKEN` secret; read the current token with `az containerapp secret show … --secret-name upload-token` and retry | validation.md E14 |
 | Function app shows 0 functions / `invalid ELF header` after publish on macOS → use the `rm -rf .python_packages` + `PIP_PLATFORM=…` command in Phase 2 step 3; check `AppTraces` for `1 functions loaded` | validation.md E15 |
 | `az containerapp update --image <acr>…` fails with no registry credentials on a manual deploy → run `az containerapp registry set --identity system` first (Phase 2 step 5) | validation.md C1/E16 |
@@ -248,4 +248,4 @@ The issues students hit most often in the dry run:
 | Cost analysis shows $0 for a fresh resource group → cost data lags ~24 h; check the last 7 days | validation.md E20 |
 | `az consumption budget create` rejects `--notifications` / misses required args on newer az CLI → use the `az rest` command in Phase 1 step 5 (or the Portal) | validation.md E13 |
 | Preflight check can't run automatically → the script prints the manual Portal/CLI step; authoritative list in `scripts/README.md` | `scripts/README.md` |
-| Anything else: README step 10, `docs/validation.md`, or ask the lecturer | — |
+| Anything else: [README step 10](../README.md#10-troubleshooting), `docs/validation.md`, or ask the lecturer | — |
