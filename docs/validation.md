@@ -202,3 +202,28 @@ Findings (all reproduced live):
 Cleanup after the dry run: `az group delete` (RG gone), CS account purged, repo secrets
 (`AZURE_CLI_TOKENS`, `UPLOAD_TOKEN`) + variables removed from the repo, test budget deleted.
 Subscription clean.
+## Foundry diagnostic gap fix (2026-11-15, PAYG sub, swedencentral, rg-clc3-diagfix)
+
+Gap (found in the student-role dry run, E18): the function calls the **project** endpoint
+(`.../api/projects/clc3-project`), but the diagnostic setting was only on the **account** —
+and account-level `Audit`/`Trace`/`AzureOpenAIRequestUsage` emitted zero `AzureDiagnostics`
+rows for project-endpoint inference calls (verified over 3 h).
+
+Fix: `diagnostics.bicep` now adds a second setting scoped to the project child resource
+(`Microsoft.CognitiveServices/accounts/projects`) with `Audit` + `Trace` + `AllMetrics`
+(the project rejects `AzureOpenAIRequestUsage` — "Category ... is not supported", verified
+live via `az monitor diagnostic-settings categories list`).
+
+Live verification after redeploy (`clc3-diagfix`, 3 inference calls via the project
+endpoint, gpt-5-mini):
+
+| Channel | Result (verified live) |
+|---|---|
+| `AzureMetrics`, provider `MICROSOFT.COGNITIVESERVICES`, account resource | works within ~1-2 min: `AzureOpenAIRequests=2`, `TotalTokens=80`, `InputTokens/OutputTokens`, `Latency` — **this is the reliable LAW query for model usage** |
+| `AzureDiagnostics` COG log categories (account Audit/Trace/AzureOpenAIRequestUsage, project Audit/Trace) | still **0 rows after 25 min** — log categories do not emit for these calls; do not rely on them |
+| Foundry portal (ai.azure.com -> project -> Monitoring) | works (requests/tokens/latency) |
+
+README step 7 KQL updated to the working `AzureMetrics` query; `docs/exam-phases.md` Phase 3
+updated on `feature/exam-phases-plan`.
+
+Scratch RG deleted + CS account purged afterwards; subscription clean.

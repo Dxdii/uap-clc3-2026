@@ -30,6 +30,14 @@
 //   - a Flex Consumption site supports only FunctionAppLogs + audit categories
 //     (AppServiceHTTPLogs etc. are rejected on this SKU)
 //   - Event Grid system topics expose only DeliveryFailures
+//
+// Foundry (verified live, 2026-11-15): inference calls go to the PROJECT endpoint
+// and are observable via AllMetrics on the account — AzureMetrics rows
+// (AzureOpenAIRequests, InputTokens/OutputTokens/TotalTokens, Latency) appear within
+// ~1-2 min. The LOG categories (account Audit/Trace/AzureOpenAIRequestUsage, project
+// Audit/Trace) did NOT emit any AzureDiagnostics rows within 25 min for
+// project-endpoint calls, so the reliable LAW path for model usage is AzureMetrics
+// plus the Foundry portal (ai.azure.com -> project -> Monitoring).
 // =============================================================================
 
 param workspaceId string
@@ -38,6 +46,7 @@ param systemTopicName string
 param cosmosAccountName string
 param acrName string
 param foundryAccountName string
+param foundryProjectName string
 param functionAppName string
 
 resource storage 'Microsoft.Storage/storageAccounts@2025-06-01' existing = {
@@ -66,6 +75,15 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
 
 resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: foundryAccountName
+}
+
+// The function calls the PROJECT endpoint (.../api/projects/<project>). The project
+// child resource supports only Audit/Trace (+AllMetrics) — 'AzureOpenAIRequestUsage'
+// is rejected there ("Category ... is not supported", verified live). Keep a setting
+// on the project so project-level Audit (CRUD on the project) is captured; the actual
+// inference usage is visible via AllMetrics (AzureMetrics) on the account.
+resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' existing = {
+  name: '${foundryAccountName}/${foundryProjectName}'
 }
 
 resource site 'Microsoft.Web/sites@2025-03-01' existing = {
@@ -159,6 +177,26 @@ resource dsFoundry 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = 
       { category: 'AzureOpenAIRequestUsage', enabled: true } // token usage per call — no payloads
       // 'RequestResponse' intentionally disabled — logs full payloads incl.
       // the base64 image (see header comment).
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
+// Project level: captures project CRUD audit events. Inference traces/usage for
+// project-endpoint calls are NOT emitted here (verified live) — use AzureMetrics
+// on the account + the Foundry portal for token usage. RequestResponse stays off
+// (it would log full payloads incl. base64 images).
+resource dsFoundryProject 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'to-log-analytics'
+  scope: foundryProject
+  dependsOn: [dsFoundry] // serialize writes on the same parent account
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'Audit', enabled: true }
+      { category: 'Trace', enabled: true }
     ]
     metrics: [
       { category: 'AllMetrics', enabled: true }

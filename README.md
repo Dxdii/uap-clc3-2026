@@ -275,13 +275,14 @@ StorageBlobLogs
 | project TimeGenerated, OperationName, Uri, StatusCode, CallerIpAddress
 | order by TimeGenerated desc | take 20
 
-// AI token usage per call: visible in ai.azure.com -> project -> Monitoring. The account-level
-// 'AzureOpenAIRequestUsage' diagnostic category does NOT emit rows for project-endpoint calls
-// (verified live), so the query below stays empty — use the portal instead.
-AzureDiagnostics
-| where ResourceProvider == "MICROSOFT.COGNITIVESERVICES" and Category == "AzureOpenAIRequestUsage"
-| project TimeGenerated, OperationName, tokenCount_d = tolong(properties_s.tokenCount)
-| order by TimeGenerated desc | take 20
+// AI usage per call — via AllMetrics on the Foundry account (verified live: the
+// AzureOpenAIRequestUsage/Audit/Trace LOG categories do not emit rows for
+// project-endpoint calls; metrics appear within ~1-2 min). Also see
+// ai.azure.com -> project -> Monitoring for the same data in the portal.
+AzureMetrics
+| where ResourceProvider =~ "MICROSOFT.COGNITIVESERVICES"
+  and MetricName in ("AzureOpenAIRequests", "InputTokens", "OutputTokens", "TotalTokens", "Latency")
+| project TimeGenerated, MetricName, Total, UnitName, Resource| order by TimeGenerated desc | take 20
 
 // Cosmos data-plane operations (the function's output-binding writes)
 AzureDiagnostics
