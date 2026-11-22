@@ -9,20 +9,23 @@
       "isBackground": true,
       "dependsOn": "pip install (functions)",
       "options": {
-        "cwd": "${workspaceFolder}/src/image-analysis-function"
+        "cwd": "${workspaceFolder}/src/image-analysis-function",
+        "env": {
+          "languageWorkers__python__arguments": "-m debugpy --listen 0.0.0.0:9091 --wait-for-client"
+        }
       }
     },
     {
       "label": "pip install (functions)",
       "type": "shell",
       "osx": {
-        "command": "${config:azureFunctions.pythonVenv}/bin/python -m pip install -r requirements.txt"
+        "command": "${config:azureFunctions.pythonVenv}/bin/python -m pip install -r requirements-dev.txt"
       },
       "windows": {
-        "command": "${config:azureFunctions.pythonVenv}\\Scripts\\python -m pip install -r requirements.txt"
+        "command": "${config:azureFunctions.pythonVenv}\\Scripts\\python -m pip install -r requirements-dev.txt"
       },
       "linux": {
-        "command": "${config:azureFunctions.pythonVenv}/bin/python -m pip install -r requirements.txt"
+        "command": "${config:azureFunctions.pythonVenv}/bin/python -m pip install -r requirements-dev.txt"
       },
       "problemMatcher": [],
       "options": {
